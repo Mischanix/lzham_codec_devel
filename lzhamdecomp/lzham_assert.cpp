@@ -55,7 +55,7 @@ void lzham_trace(const char* pFmt, va_list args)
 
       lzham_output_debug_string(buf);
    }
-};
+}
 
 void lzham_trace(const char* pFmt, ...)
 {
@@ -63,4 +63,18 @@ void lzham_trace(const char* pFmt, ...)
    va_start(args, pFmt);
    lzham_trace(pFmt, args);
    va_end(args);
-};
+}
+
+#if LZHAM_ERROR_LOGGING
+#if LZHAM_VERBOSE_ERROR_LOGGING
+void lzham_log_error(const char *pFunc, const char *pFile, int line, const char *pMsg, int idx)
+{
+   fprintf(stderr, "\nlzham_log_error: %i %s file: %s line: %u func %s\n", idx, pMsg ? pMsg : "", pFile, line, pFunc);
+}
+#else
+void lzham_log_error(int idx)
+{
+   fprintf(stderr, "\nlzham_log_error: %i\n", idx);
+}
+#endif
+#endif

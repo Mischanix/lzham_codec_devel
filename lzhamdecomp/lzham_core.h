@@ -6,11 +6,16 @@
    #pragma warning (disable: 4127) // conditional expression is constant
 #endif
 
+// If LZHAM_ERROR_LOGGING is 1, LZHAM will write a short internal error codes to stderr when something goes wrong. These codes can be very useful for postmortem debugging.
+#define LZHAM_ERROR_LOGGING 1
+// If LZHAM_VERBOSE_ERROR_LOGGING, LZHAM will also write the function, file and line # along with the error code to stderr.
+#define LZHAM_VERBOSE_ERROR_LOGGING 0
+
 // Enable this when first porting to new platforms - disables all threading and atomic ops in compressor:
 //#define LZHAM_ANSI_CPLUSPLUS 1
 
 #if defined(__FreeBSD__) || defined(__NetBSD__)
-   // TODO: I haven't compiled/tested on these platforms yet, let's play it safe for now.
+   // TODO: I compile and do minimal testing on FreeBSD v10.1 x86, but I haven't enabled threading there yet. (Should be easy because OSX is already supported with threading.)
    #define LZHAM_ANSI_CPLUSPLUS 1
 #endif
 
@@ -35,6 +40,9 @@
    #define LZHAM_RESTRICT __restrict
    #define LZHAM_FORCE_INLINE __forceinline
    #define LZHAM_NOTE_UNUSED(x) (void)x
+
+   #define LZHAM_PRIi64 "I64i"
+   #define LZHAM_PRIu64 "I64u"
 
 #elif defined(WIN32) && !defined(LZHAM_ANSI_CPLUSPLUS)
    // --- Windows: MSVC or MinGW, x86 or x64, Win32 API's for threading and Win32 Interlocked API's or GCC built-ins for atomic ops.
@@ -92,6 +100,9 @@
 
    #define LZHAM_NOTE_UNUSED(x) (void)x
 
+   #define LZHAM_PRIi64 "I64i"
+   #define LZHAM_PRIu64 "I64u"
+
 #elif defined(__APPLE__) && !defined(LZHAM_ANSI_CPLUSPLUS)
    // --- Apple: iOS or OSX
    #if (TARGET_IPHONE_SIMULATOR == 1) || (TARGET_OS_IPHONE == 1)
@@ -128,6 +139,9 @@
 
       #define LZHAM_NOTE_UNUSED(x) (void)x
 
+      #define LZHAM_PRIi64 PRIi64
+      #define LZHAM_PRIu64 PRIu64
+
    #elif (TARGET_OS_MAC == 1)
       #define LZHAM_PLATFORM_PC 1
 
@@ -161,6 +175,9 @@
       #endif
 
       #define LZHAM_NOTE_UNUSED(x) (void)x
+
+      #define LZHAM_PRIi64 PRIi64
+      #define LZHAM_PRIu64 PRIu64
    #elif
       #error TODO: Unknown Apple target
    #endif
@@ -200,8 +217,14 @@
    #endif
 
    #define LZHAM_NOTE_UNUSED(x) (void)x
+
+   #define LZHAM_PRIi64 PRIi64
+   #define LZHAM_PRIu64 PRIu64
 #else
+
+#ifndef _MSC_VER
    #warning Building as vanilla ANSI-C/C++, multi-threaded compression is disabled! Please configure lzhamdecomp/lzham_core.h.
+#endif
 
    // --- Vanilla ANSI-C/C++
    // No threading support, unaligned loads are NOT okay, no atomic ops.
@@ -228,6 +251,9 @@
    #define LZHAM_FORCE_INLINE inline
 
    #define LZHAM_NOTE_UNUSED(x) (void)x
+
+   #define LZHAM_PRIi64 PRIi64
+   #define LZHAM_PRIu64 PRIu64
 #endif
 
 #if LZHAM_LITTLE_ENDIAN_CPU
@@ -249,6 +275,14 @@ const bool c_lzham_big_endian_platform = !c_lzham_little_endian_platform;
 #include <limits.h>
 #include <algorithm>
 #include <errno.h>
+
+#ifndef _MSC_VER
+   #ifndef __STDC_FORMAT_MACROS
+      #define __STDC_FORMAT_MACROS
+   #endif
+   // Needed for PRIi64 and PRIu64
+   #include <inttypes.h>
+#endif
 
 #include "lzham.h"
 #include "lzham_config.h"

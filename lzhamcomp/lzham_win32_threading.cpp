@@ -3,13 +3,16 @@
 #include "lzham_core.h"
 #include "lzham_win32_threading.h"
 #include "lzham_timer.h"
+#include "lzham_lzcomp_internal.h"
 #include <process.h>
 
 #if LZHAM_USE_WIN32_API
 
 namespace lzham
 {
-   task_pool::task_pool() :
+   task_pool::task_pool(lzham_malloc_context malloc_context) :
+      m_malloc_context(malloc_context),
+      m_task_stack(malloc_context),
       m_num_threads(0),
       m_tasks_available(0, 32767),
       m_num_outstanding_tasks(0),
@@ -18,7 +21,9 @@ namespace lzham
       utils::zero_object(m_threads);
    }
 
-   task_pool::task_pool(uint num_threads) :
+   task_pool::task_pool(lzham_malloc_context malloc_context, uint num_threads) :
+      m_malloc_context(malloc_context),
+      m_task_stack(malloc_context),
       m_num_threads(0),
       m_tasks_available(0, 32767),
       m_num_outstanding_tasks(0),
@@ -53,6 +58,7 @@ namespace lzham
          if (!m_threads[m_num_threads])
          {
             succeeded = false;
+            LZHAM_LOG_ERROR(10000);
             break;
          }
 
@@ -115,7 +121,10 @@ namespace lzham
       tsk.m_flags = 0;
 
       if (!m_task_stack.try_push(tsk))
+      {
+         LZHAM_LOG_ERROR(10001);
          return false;
+      }
 
       atomic_increment32(&m_num_outstanding_tasks);
 
@@ -137,7 +146,10 @@ namespace lzham
       tsk.m_flags = cTaskFlagObject;
 
       if (!m_task_stack.try_push(tsk))
+      {
+         LZHAM_LOG_ERROR(10002);
          return false;
+      }
 
       atomic_increment32(&m_num_outstanding_tasks);
 
@@ -209,7 +221,7 @@ namespace lzham
       if (g_num_processors > 1)
       {
          // use all CPU's
-         return LZHAM_MIN(task_pool::cMaxThreads, g_num_processors - 1);
+         return LZHAM_MIN((uint)task_pool::cMaxThreads, g_num_processors - 1);
       }
 
       return 0;

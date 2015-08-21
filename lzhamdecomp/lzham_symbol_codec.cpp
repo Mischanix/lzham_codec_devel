@@ -228,7 +228,12 @@ namespace lzham
    static arith_prob_cost_initializer g_prob_cost_initializer;
 #endif
 
-   raw_quasi_adaptive_huffman_data_model::raw_quasi_adaptive_huffman_data_model(bool encoding, uint total_syms, uint max_update_interval, uint adapt_rate) :
+   quasi_adaptive_huffman_data_model::quasi_adaptive_huffman_data_model(lzham_malloc_context malloc_context, bool encoding, uint total_syms, uint max_update_interval, uint adapt_rate) :
+      m_malloc_context(malloc_context),
+      m_initial_sym_freq(malloc_context),
+      m_sym_freq(malloc_context),
+      m_codes(malloc_context),
+      m_code_sizes(malloc_context),
       m_pDecode_tables(NULL),
       m_total_syms(0),
       m_max_cycle(0),
@@ -242,11 +247,16 @@ namespace lzham
    {
       if (total_syms)
       {
-         init2(encoding, total_syms, max_update_interval, adapt_rate, NULL);
+         init2(malloc_context, encoding, total_syms, max_update_interval, adapt_rate, NULL);
       }
    }
 
-   raw_quasi_adaptive_huffman_data_model::raw_quasi_adaptive_huffman_data_model(const raw_quasi_adaptive_huffman_data_model& other) :
+   quasi_adaptive_huffman_data_model::quasi_adaptive_huffman_data_model(const quasi_adaptive_huffman_data_model& other) :
+      m_malloc_context(other.m_malloc_context),
+      m_initial_sym_freq(other.m_malloc_context),
+      m_sym_freq(other.m_malloc_context),
+      m_codes(other.m_malloc_context),
+      m_code_sizes(other.m_malloc_context),
       m_pDecode_tables(NULL),
       m_total_syms(0),
       m_max_cycle(0),
@@ -261,16 +271,28 @@ namespace lzham
       *this = other;
    }
 
-   raw_quasi_adaptive_huffman_data_model::~raw_quasi_adaptive_huffman_data_model()
+   quasi_adaptive_huffman_data_model::~quasi_adaptive_huffman_data_model()
    {
       if (m_pDecode_tables)
-         lzham_delete(m_pDecode_tables);
+         lzham_delete(m_malloc_context, m_pDecode_tables);
    }
 
-   bool raw_quasi_adaptive_huffman_data_model::assign(const raw_quasi_adaptive_huffman_data_model& rhs)
+   bool quasi_adaptive_huffman_data_model::assign(const quasi_adaptive_huffman_data_model& rhs)
    {
       if (this == &rhs)
          return true;
+
+      if (m_malloc_context != rhs.m_malloc_context)
+      {
+         clear();
+
+         m_malloc_context = rhs.m_malloc_context;
+
+         m_initial_sym_freq.set_malloc_context(m_malloc_context);
+         m_sym_freq.set_malloc_context(m_malloc_context);
+         m_codes.set_malloc_context(m_malloc_context);
+         m_code_sizes.set_malloc_context(m_malloc_context);
+      }
 
       m_total_syms = rhs.m_total_syms;
 
@@ -298,17 +320,18 @@ namespace lzham
          }
          else
          {
-            m_pDecode_tables = lzham_new<prefix_coding::decoder_tables>(*rhs.m_pDecode_tables);
+            m_pDecode_tables = lzham_new<prefix_coding::decoder_tables>(m_malloc_context, *rhs.m_pDecode_tables);
             if (!m_pDecode_tables)
             {
                clear();
+               LZHAM_LOG_ERROR(4000);
                return false;
             }
          }
       }
       else if (m_pDecode_tables)
       {
-         lzham_delete(m_pDecode_tables);
+         lzham_delete(m_malloc_context, m_pDecode_tables);
          m_pDecode_tables = NULL;
       }
 
@@ -320,13 +343,13 @@ namespace lzham
       return true;
    }
 
-   raw_quasi_adaptive_huffman_data_model& raw_quasi_adaptive_huffman_data_model::operator= (const raw_quasi_adaptive_huffman_data_model& rhs)
+   quasi_adaptive_huffman_data_model& quasi_adaptive_huffman_data_model::operator= (const quasi_adaptive_huffman_data_model& rhs)
    {
       assign(rhs);
       return *this;
    }
 
-   void raw_quasi_adaptive_huffman_data_model::clear()
+   void quasi_adaptive_huffman_data_model::clear()
    {
       m_sym_freq.clear();
       m_initial_sym_freq.clear();
@@ -342,7 +365,7 @@ namespace lzham
 
       if (m_pDecode_tables)
       {
-         lzham_delete(m_pDecode_tables);
+         lzham_delete(m_malloc_context, m_pDecode_tables);
          m_pDecode_tables = NULL;
       }
 
@@ -350,10 +373,22 @@ namespace lzham
       m_adapt_rate = 0;
    }
 
-   bool raw_quasi_adaptive_huffman_data_model::init2(bool encoding, uint total_syms, uint max_update_interval, uint adapt_rate, const uint16 *pInitial_sym_freq)
+   bool quasi_adaptive_huffman_data_model::init2(lzham_malloc_context malloc_context, bool encoding, uint total_syms, uint max_update_interval, uint adapt_rate, const uint16 *pInitial_sym_freq)
    {
       LZHAM_ASSERT(max_update_interval <= 0xFFFF);
       LZHAM_ASSERT(adapt_rate <= 0xFFFF);
+
+      if (malloc_context != m_malloc_context)
+      {
+         clear();
+
+         m_malloc_context = malloc_context;
+
+         m_initial_sym_freq.set_malloc_context(m_malloc_context);
+         m_sym_freq.set_malloc_context(m_malloc_context);
+         m_codes.set_malloc_context(m_malloc_context);
+         m_code_sizes.set_malloc_context(m_malloc_context);
+      }
 
       m_encoding = encoding;
       m_max_update_interval = static_cast<uint16>(max_update_interval);
@@ -363,6 +398,7 @@ namespace lzham
       if (!m_sym_freq.try_resize(total_syms))
       {
          clear();
+         LZHAM_LOG_ERROR(4001);
          return false;
       }
       
@@ -371,6 +407,7 @@ namespace lzham
          if (!m_initial_sym_freq.try_resize(total_syms))
          {
             clear();
+            LZHAM_LOG_ERROR(4002);
             return false;
          }
          memcpy(m_initial_sym_freq.begin(), pInitial_sym_freq, total_syms * m_initial_sym_freq.size_in_bytes());
@@ -379,6 +416,7 @@ namespace lzham
       if (!m_code_sizes.try_resize(total_syms))
       {
          clear();
+         LZHAM_LOG_ERROR(4003);
          return false;
       }
 
@@ -395,21 +433,23 @@ namespace lzham
       
       if (m_encoding)
       {
-         lzham_delete(m_pDecode_tables);
+         lzham_delete(m_malloc_context, m_pDecode_tables);
          m_pDecode_tables = NULL;
 
          if (!m_codes.try_resize(total_syms))
          {
             clear();
+            LZHAM_LOG_ERROR(4004);
             return false;
          }
       }
       else if (!m_pDecode_tables)
       {
-         m_pDecode_tables = lzham_new<prefix_coding::decoder_tables>();
+         m_pDecode_tables = lzham_new<prefix_coding::decoder_tables>(m_malloc_context, m_malloc_context);
          if (!m_pDecode_tables)
          {
             clear();
+            LZHAM_LOG_ERROR(4005);
             return false;
          }
       }
@@ -423,7 +463,7 @@ namespace lzham
       return true;
    }
 
-   bool raw_quasi_adaptive_huffman_data_model::reset()
+   bool quasi_adaptive_huffman_data_model::reset()
    {
       if (!m_total_syms)
          return true;
@@ -444,9 +484,35 @@ namespace lzham
       }
       else
       {
+#if LZHAM_LITTLE_ENDIAN_CPU         
+         // &m_sym_freq[0] should be aligned to at least 8 bytes due to LZHAM_MIN_ALLOC_ALIGNMENT
+         uint64 x = 0x0001000100010001ULL;
+         x = (x << 32U) | x;
+
+         uint64 *p = reinterpret_cast<uint64 *>(&m_sym_freq[0]);
+
+         for (uint64 *q = p + ((m_total_syms >> 3) * 2); p != q; p += 2)
+         {
+            p[0] = x;
+            p[1] = x;
+         }
+
+         uint16 *r = reinterpret_cast<uint16 *>(p);
+         for (uint i = (m_total_syms & 7); i; --i)
+            *r++ = 1;
+
+#ifdef LZHAM_BUILD_DEBUG
+         for (uint i = 0; i < m_total_syms; i++)
+         {
+            LZHAM_ASSERT(m_sym_freq[i] == 1);
+         }
+#endif
+
+#else
          for (uint i = 0; i < m_total_syms; i++)
             m_sym_freq[i] = 1;
-         
+#endif
+
          // Slam m_update_cycle to a specific value so update_tables() sets m_total_count to the proper value
          m_update_cycle = m_total_syms;
          
@@ -457,12 +523,15 @@ namespace lzham
       m_symbols_until_update = 0;
             
       if (!update_tables(LZHAM_MIN(m_max_cycle, 16), sym_freq_all_ones)) // this was 8 in the alphas
+      {
+         LZHAM_LOG_ERROR(4006);
          return false;
-                           
+      }
+                                 
       return true;
    }
 
-   void raw_quasi_adaptive_huffman_data_model::rescale()
+   void quasi_adaptive_huffman_data_model::rescale()
    {
       uint total_freq = 0;
 
@@ -476,11 +545,11 @@ namespace lzham
       m_total_count = total_freq;
    }
 
-   void raw_quasi_adaptive_huffman_data_model::reset_update_rate()
+   void quasi_adaptive_huffman_data_model::reset_update_rate()
    {
       m_total_count += (m_update_cycle - m_symbols_until_update);
 
-#ifdef _DEBUG
+#ifdef LZHAM_BUILD_DEBUG
       uint actual_total = 0;
       for (uint i = 0; i < m_sym_freq.size(); i++)
          actual_total += m_sym_freq[i];
@@ -493,7 +562,7 @@ namespace lzham
       m_symbols_until_update = m_update_cycle = LZHAM_MIN(8, m_update_cycle);
    }
       
-   bool raw_quasi_adaptive_huffman_data_model::update_tables(int force_update_cycle, bool sym_freq_all_ones)
+   bool quasi_adaptive_huffman_data_model::update_tables(int force_update_cycle, bool sym_freq_all_ones)
    {
       LZHAM_ASSERT(!m_symbols_until_update);
       m_total_count += m_update_cycle;
@@ -504,6 +573,9 @@ namespace lzham
 
       uint max_code_size = 0;
 
+      code_size_histogram code_size_hist;
+      code_size_hist.clear();
+      
       if ((sym_freq_all_ones) && (m_total_syms >= 2))
       {
          // Shortcut building the Huffman codes if we know all the sym freqs are 1.
@@ -515,6 +587,8 @@ namespace lzham
 
          memset(&m_code_sizes[0], base_code_size + 1, num_left);
          memset(&m_code_sizes[num_left], base_code_size, m_total_syms - num_left);  
+         
+         code_size_hist.init(base_code_size, m_total_syms - num_left, base_code_size + 1, num_left);
             
          max_code_size = base_code_size + (num_left ? 1 : 0);
       }
@@ -526,20 +600,52 @@ namespace lzham
          void *pTables = alloca(table_size);
 
          uint total_freq = 0;                  
-         status = generate_huffman_codes(pTables, m_total_syms, &m_sym_freq[0], &m_code_sizes[0], max_code_size, total_freq);
+         status = generate_huffman_codes(pTables, m_total_syms, &m_sym_freq[0], &m_code_sizes[0], max_code_size, total_freq, code_size_hist);
          LZHAM_ASSERT(status);
          LZHAM_ASSERT(total_freq == m_total_count);
          if ((!status) || (total_freq != m_total_count))
-            return false;
-
-         if (max_code_size > prefix_coding::cMaxExpectedCodeSize)
          {
-            status = prefix_coding::limit_max_code_size(m_total_syms, &m_code_sizes[0], prefix_coding::cMaxExpectedCodeSize);
+            LZHAM_LOG_ERROR(4007);
+            return false;
+         }
+
+         if (max_code_size > cMaxExpectedHuffCodeSize)
+         {
+            status = prefix_coding::limit_max_code_size(m_total_syms, &m_code_sizes[0], cMaxExpectedHuffCodeSize);
             LZHAM_ASSERT(status);
             if (!status)
+            {
+               LZHAM_LOG_ERROR(4008);
                return false;
+            }
+               
+            code_size_hist.clear();
+            code_size_hist.init(m_total_syms, &m_code_sizes[0]);
+
+            for (max_code_size = cMaxExpectedHuffCodeSize; max_code_size >= 1; max_code_size--)
+               if (code_size_hist.m_num_codes[max_code_size])
+                  break;
          }
       }
+
+#ifdef LZHAM_BUILD_DEBUG
+{
+      uint check_max_code_size = 0;
+      uint check_total_syms[cMaxExpectedHuffCodeSize + 1];
+      utils::zero_object(check_total_syms);
+      for (uint i = 0; i < m_total_syms; i++)
+      {
+         uint code_size = m_code_sizes[i];
+         check_max_code_size = math::maximum(check_max_code_size, code_size);
+         check_total_syms[code_size]++;
+      }
+      LZHAM_ASSERT(max_code_size == check_max_code_size);
+      for (uint i = 0; i < (cMaxExpectedHuffCodeSize + 1); i++)
+      {
+         LZHAM_ASSERT(code_size_hist.m_num_codes[i] == check_total_syms[i]);
+      }
+}
+#endif
 
       if (force_update_cycle >= 0)
          m_symbols_until_update = m_update_cycle = force_update_cycle;
@@ -565,28 +671,34 @@ namespace lzham
          if (cost_to_not_use_table <= cost_to_use_table)
             actual_table_bits = 0;
 
-         status = prefix_coding::generate_decoder_tables(m_total_syms, &m_code_sizes[0], m_pDecode_tables, actual_table_bits);
+         status = prefix_coding::generate_decoder_tables(m_total_syms, &m_code_sizes[0], m_pDecode_tables, actual_table_bits, code_size_hist, sym_freq_all_ones);
       }
 
       LZHAM_ASSERT(status);
       if (!status)
+      {
+         LZHAM_LOG_ERROR(4009);
          return false;
+      }
                
       return true;
    }
 
-   bool raw_quasi_adaptive_huffman_data_model::update_sym(uint sym)
+   bool quasi_adaptive_huffman_data_model::update_sym(uint sym)
    {
       uint freq = m_sym_freq[sym];
       freq++;
       m_sym_freq[sym] = static_cast<uint16>(freq);
 
-      LZHAM_ASSERT(freq <= UINT16_MAX);
+      LZHAM_ASSERT(freq <= cUINT16_MAX);
 
       if (--m_symbols_until_update == 0)
       {
          if (!update_tables())
+         {
+            LZHAM_LOG_ERROR(4010);
             return false;
+         }
       }
 
       return true;
@@ -606,105 +718,12 @@ namespace lzham
    {
       m_bit_0_prob = static_cast<uint16>(math::clamp<uint>((uint)(prob0 * cSymbolCodecArithProbScale), 1, cSymbolCodecArithProbScale - 1));
    }
-
-   adaptive_arith_data_model::adaptive_arith_data_model(bool encoding, uint total_syms)
-   {
-      init(encoding, total_syms);
-   }
-
-   adaptive_arith_data_model::adaptive_arith_data_model(const adaptive_arith_data_model& other)
-   {
-      m_total_syms = other.m_total_syms;
-      m_probs = other.m_probs;
-   }
-
-   adaptive_arith_data_model::~adaptive_arith_data_model()
-   {
-   }
-
-   adaptive_arith_data_model& adaptive_arith_data_model::operator= (const adaptive_arith_data_model& rhs)
-   {
-      m_total_syms = rhs.m_total_syms;
-      m_probs = rhs.m_probs;
-      return *this;
-   }
-
-   void adaptive_arith_data_model::clear()
-   {
-      m_total_syms = 0;
-      m_probs.clear();
-   }
-
-   bool adaptive_arith_data_model::init(bool encoding, uint total_syms)
-   {
-      LZHAM_NOTE_UNUSED(encoding);
-      if (!total_syms)
-      {
-         clear();
-         return true;
-      }
-
-      if ((total_syms < 2) || (!math::is_power_of_2(total_syms)))
-         total_syms = math::next_pow2(total_syms);
-
-      m_total_syms = total_syms;
-
-      if (!m_probs.try_resize(m_total_syms))
-         return false;
-
-      return true;
-   }
-
-   void adaptive_arith_data_model::reset()
-   {
-      for (uint i = 0; i < m_probs.size(); i++)
-         m_probs[i].clear();
-   }
-
-   void adaptive_arith_data_model::reset_update_rate()
-   {
-   }
-
-   bool adaptive_arith_data_model::update(uint sym)
-   {
-      uint node = 1;
-
-      uint bitmask = m_total_syms;
-
-      do
-      {
-         bitmask >>= 1;
-
-         uint bit = (sym & bitmask) ? 1 : 0;
-         m_probs[node].update(bit);
-         node = (node << 1) + bit;
-
-      } while (bitmask > 1);
-
-      return true;
-   }
-
-   bit_cost_t adaptive_arith_data_model::get_cost(uint sym) const
-   {
-      uint node = 1;
-
-      uint bitmask = m_total_syms;
-
-      bit_cost_t cost = 0;
-      do
-      {
-         bitmask >>= 1;
-
-         uint bit = (sym & bitmask) ? 1 : 0;
-         cost += m_probs[node].get_cost(bit);
-         node = (node << 1) + bit;
-
-      } while (bitmask > 1);
-
-      return cost;
-   }
-
-   symbol_codec::symbol_codec()
+      
+   symbol_codec::symbol_codec(lzham_malloc_context malloc_context) :
+      m_malloc_context(malloc_context),
+      m_output_buf(malloc_context),
+      m_arith_output_buf(malloc_context),
+      m_output_syms(malloc_context)
    {
       clear();
    }
@@ -776,14 +795,23 @@ namespace lzham
       if (num_bits > 16)
       {
          if (!record_put_bits(bits >> 16, num_bits - 16))
+         {
+            LZHAM_LOG_ERROR(4011);
             return false;
+         }
          if (!record_put_bits(bits & 0xFFFF, 16))
+         {
+            LZHAM_LOG_ERROR(4012);
             return false;
+         }
       }
       else
       {
          if (!record_put_bits(bits, num_bits))
+         {
+            LZHAM_LOG_ERROR(4013);
             return false;
+         }
       }
       return true;
    }
@@ -797,7 +825,10 @@ namespace lzham
       sym.m_num_bits = output_symbol::cArithInit;
       sym.m_arith_prob0 = 0;
       if (!m_output_syms.try_push_back(sym))
+      {
+         LZHAM_LOG_ERROR(4014);
          return false;
+      }
 
       return true;
    }
@@ -811,7 +842,10 @@ namespace lzham
       sym.m_num_bits = output_symbol::cAlignToByteSym;
       sym.m_arith_prob0 = 0;
       if (!m_output_syms.try_push_back(sym))
+      {
+         LZHAM_LOG_ERROR(4015);
          return false;
+      }
 
       return true;
    }
@@ -822,19 +856,25 @@ namespace lzham
       LZHAM_ASSERT(model.m_encoding);
 
       if (!record_put_bits(model.m_codes[sym], model.m_code_sizes[sym]))
+      {
+         LZHAM_LOG_ERROR(4016);
          return false;
+      }
 
       uint freq = model.m_sym_freq[sym];
       freq++;
       model.m_sym_freq[sym] = static_cast<uint16>(freq);
       
-      LZHAM_ASSERT(freq <= UINT16_MAX);
+      LZHAM_ASSERT(freq <= cUINT16_MAX);
 
       if (--model.m_symbols_until_update == 0)
       {
          m_total_model_updates++;
          if (!model.update_tables())
+         {
+            LZHAM_LOG_ERROR(4018);
             return false;
+         }
       }
       return true;
    }
@@ -892,7 +932,10 @@ namespace lzham
       sym.m_num_bits = -1;
       sym.m_arith_prob0 = model.m_bit_0_prob;
       if (!m_output_syms.try_push_back(sym))
+      {
+         LZHAM_LOG_ERROR(4019);
          return false;
+      }
 
       uint x = model.m_bit_0_prob * (m_arith_length >> cSymbolCodecArithProbBits);
 
@@ -918,31 +961,15 @@ namespace lzham
       if (m_arith_length < cSymbolCodecArithMinLen)
       {
          if (!arith_renorm_enc_interval())
+         {
+            LZHAM_LOG_ERROR(4020);
             return false;
+         }
       }
 
       return true;
    }
-
-   bool symbol_codec::encode(uint sym, adaptive_arith_data_model& model)
-   {
-      uint node = 1;
-
-      uint bitmask = model.m_total_syms;
-
-      do
-      {
-         bitmask >>= 1;
-
-         uint bit = (sym & bitmask) ? 1 : 0;
-         if (!encode(bit, model.m_probs[node]))
-            return false;
-         node = (node << 1) + bit;
-
-      } while (bitmask > 1);
-      return true;
-   }
-
+      
    bool symbol_codec::arith_stop_encoding()
    {
       uint orig_base = m_arith_base;
@@ -962,12 +989,18 @@ namespace lzham
          arith_propagate_carry();
 
       if (!arith_renorm_enc_interval())
+      {
+         LZHAM_LOG_ERROR(4021);
          return false;
+      }
 
       while (m_arith_output_buf.size() < 4)
       {
          if (!m_arith_output_buf.try_push_back(0))
+         {
+            LZHAM_LOG_ERROR(4022);
             return false;
+         }
          m_total_bits_written += 8;
       }
       return true;
@@ -1007,7 +1040,10 @@ namespace lzham
       sym.m_num_bits = (uint16)num_bits;
       sym.m_arith_prob0 = 0;
       if (!m_output_syms.try_push_back(sym))
+      {
+         LZHAM_LOG_ERROR(4023);
          return false;
+      }
 
       return true;
    }
@@ -1019,7 +1055,10 @@ namespace lzham
 
       m_output_buf.try_resize(0);
       if (!m_output_buf.try_reserve(expected_size))
+      {
+         LZHAM_LOG_ERROR(4024);
          return false;
+      }
 
       return true;
    }
@@ -1055,7 +1094,10 @@ namespace lzham
       if (num_bits_in & 7)
       {
          if (!put_bits(0, 8 - (num_bits_in & 7)))
+         {
+            LZHAM_LOG_ERROR(4025);
             return false;
+         }
       }
       return true;
    }
@@ -1080,7 +1122,10 @@ namespace lzham
          if (sym.m_num_bits == output_symbol::cAlignToByteSym)
          {
             if (!put_bits_align_to_byte())
+            {
+               LZHAM_LOG_ERROR(4026);
                return false;
+            }
          }
          else if (sym.m_num_bits == output_symbol::cArithInit)
          {
@@ -1095,7 +1140,10 @@ namespace lzham
                   const uint c = m_arith_output_buf[arith_buf_ofs++];
                   m_arith_value = (m_arith_value << 8) | c;
                   if (!put_bits(c, 8))
+                  {
+                     LZHAM_LOG_ERROR(4027);
                      return false;
+                  }
                }
             }
          }
@@ -1108,7 +1156,10 @@ namespace lzham
                {
                   const uint c = (arith_buf_ofs < m_arith_output_buf.size()) ? m_arith_output_buf[arith_buf_ofs++] : 0;
                   if (!put_bits(c, 8))
+                  {
+                     LZHAM_LOG_ERROR(4028);
                      return false;
+                  }
                   m_arith_value = (m_arith_value << 8) | c;
                } while ((m_arith_length <<= 8) < cSymbolCodecArithMinLen);
             }
@@ -1132,7 +1183,10 @@ namespace lzham
          {
             // Huffman or plain bits
             if (!put_bits(sym.m_bits, sym.m_num_bits))
+            {
+               LZHAM_LOG_ERROR(4029);
                return false;
+            }
          }
       }
 
@@ -1146,7 +1200,10 @@ namespace lzham
    bool symbol_codec::start_decoding(const uint8* pBuf, size_t buf_size, bool eof_flag, need_bytes_func_ptr pNeed_bytes_func, void *pPrivate_data)
    {
       if (!buf_size)
+      {
+         LZHAM_LOG_ERROR(4030);
          return false;
+      }
 
       m_total_model_updates = 0;
 
@@ -1265,8 +1322,8 @@ namespace lzham
       {
          uint32 t = pTables->m_lookup[m_bit_buf >> (cBitBufSize - pTables->m_table_bits)];
 
-         LZHAM_ASSERT(t != UINT32_MAX);
-         sym = t & UINT16_MAX;
+         LZHAM_ASSERT(t != cUINT32_MAX);
+         sym = t & cUINT16_MAX;
          len = t >> 16;
 
          LZHAM_ASSERT(model.m_code_sizes[sym] == len);
@@ -1288,6 +1345,7 @@ namespace lzham
          {
             // corrupted stream, or a bug
             LZHAM_ASSERT(0);
+            LZHAM_LOG_ERROR(4031);
             return 0;
          }
 
@@ -1301,7 +1359,7 @@ namespace lzham
       freq++;
       model.m_sym_freq[sym] = static_cast<uint16>(freq);
       
-      LZHAM_ASSERT(freq <= UINT16_MAX);
+      LZHAM_ASSERT(freq <= cUINT16_MAX);
       
       if (--model.m_symbols_until_update == 0)
       {
@@ -1442,22 +1500,7 @@ namespace lzham
 
       return bit;
    }
-
-   uint symbol_codec::decode(adaptive_arith_data_model& model)
-   {
-      uint node = 1;
-
-      do
-      {
-         uint bit = decode(model.m_probs[node]);
-
-         node = (node << 1) + bit;
-
-      } while (node < model.m_total_syms);
-
-      return node - model.m_total_syms;
-   }
-
+      
    void symbol_codec::start_arith_decoding()
    {
       LZHAM_ASSERT(m_mode == cDecoding);

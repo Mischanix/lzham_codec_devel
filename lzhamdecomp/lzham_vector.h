@@ -9,6 +9,7 @@ namespace lzham
       void* m_p;
       uint m_size;
       uint m_capacity;
+      lzham_malloc_context m_malloc_context;
 
       typedef void (*object_mover)(void* pDst, void* pSrc, uint num);
 
@@ -27,17 +28,19 @@ namespace lzham
       typedef T*              pointer;
       typedef const T*        const_pointer;
 
-      inline vector() :
+      inline vector(lzham_malloc_context context = NULL) :
          m_p(NULL),
          m_size(0),
-         m_capacity(0)
+         m_capacity(0),
+         m_malloc_context(context)
       {
       }
 
-      inline vector(uint n, const T& init) :
+      inline vector(lzham_malloc_context context, uint n, const T& init) :
          m_p(NULL),
          m_size(0),
-         m_capacity(0)
+         m_capacity(0),
+         m_malloc_context(context)
       {
          increase_capacity(n, false);
          helpers::construct_array(m_p, n, init);
@@ -47,7 +50,8 @@ namespace lzham
       inline vector(const vector& other) :
          m_p(NULL),
          m_size(0),
-         m_capacity(0)
+         m_capacity(0),
+         m_malloc_context(other.m_malloc_context)
       {
          increase_capacity(other.m_size, false);
 
@@ -64,21 +68,35 @@ namespace lzham
          }
       }
 
-      inline explicit vector(uint size) :
+#if 0
+      inline explicit vector(lzham_malloc_context context, uint size) :
          m_p(NULL),
          m_size(0),
-         m_capacity(0)
+         m_capacity(0),
+         m_malloc_context(context)
       {
          try_resize(size);
       }
+#endif
 
       inline ~vector()
       {
          if (m_p)
          {
             scalar_type<T>::destruct_array(m_p, m_size);
-            lzham_free(m_p);
+            lzham_free(m_malloc_context, m_p);
          }
+      }
+
+      lzham_malloc_context get_malloc_context() const 
+      { 
+         return m_malloc_context; 
+      }
+      
+      void set_malloc_context(lzham_malloc_context context)
+      {
+         clear();
+         m_malloc_context = context;
       }
 
       inline vector& operator= (const vector& other)
@@ -93,6 +111,7 @@ namespace lzham
             clear();
             if (!increase_capacity(other.m_size, false))
             {
+               LZHAM_LOG_ERROR(5008);
                LZHAM_FAIL("lzham::vector operator=: Out of memory!");
                return *this;
             }
@@ -147,7 +166,7 @@ namespace lzham
          if (m_p)
          {
             scalar_type<T>::destruct_array(m_p, m_size);
-            lzham_free(m_p);
+            lzham_free(m_malloc_context, m_p);
             m_p = NULL;
             m_size = 0;
             m_capacity = 0;
@@ -158,7 +177,7 @@ namespace lzham
       {
          if (m_p)
          {
-            lzham_free(m_p);
+            lzham_free(m_malloc_context, m_p);
             m_p = NULL;
             m_size = 0;
             m_capacity = 0;
@@ -181,7 +200,10 @@ namespace lzham
                if (new_size > m_capacity)
                {
                   if (!increase_capacity(new_size, (new_size == (m_size + 1)) || grow_hint, true))
+                  {
+                     LZHAM_LOG_ERROR(5004);
                      return false;
+                  }
                }
 
                scalar_type<T>::construct_array(m_p + m_size, new_size - m_size);
@@ -198,7 +220,10 @@ namespace lzham
          if (new_size > m_capacity)
          {
             if (!increase_capacity(new_size, (new_size == (m_size + 1)) || grow_hint, true))
+            {
+               LZHAM_LOG_ERROR(5005);
                return false;
+            }
          }
          
          m_size = new_size;
@@ -210,7 +235,10 @@ namespace lzham
       {
          uint cur_size = m_size;
          if (!try_resize(cur_size + i, true))
+         {
+            LZHAM_LOG_ERROR(5006);
             return NULL;
+         }
          return get_ptr() + cur_size;
       }
 
@@ -221,7 +249,10 @@ namespace lzham
          if (m_size >= m_capacity)
          {
             if (!increase_capacity(m_size + 1, true, true))
+            {
+               LZHAM_LOG_ERROR(5007);
                return false;
+            }
          }
 
          scalar_type<T>::construct(m_p + m_size, obj);
@@ -463,6 +494,8 @@ namespace lzham
                if (!m) break;
                cmp = -cmp;
                i += (((m + 1) >> 1) ^ cmp) - cmp;
+               if (i < 0)
+                  break;
 
                LZHAM_ASSERT_OPEN_RANGE(i, 0, (int)m_size);
                pKey_i = m_p + i;
@@ -472,6 +505,8 @@ namespace lzham
                if (!m) break;
                cmp = -cmp;
                i += (((m + 1) >> 1) ^ cmp) - cmp;
+               if (i < 0)
+                  break;
             }
          }
 
@@ -497,6 +532,8 @@ namespace lzham
                if (!m) break;
                cmp = -cmp;
                i += (((m + 1) >> 1) ^ cmp) - cmp;
+               if (i < 0)
+                  break;
 
                LZHAM_ASSERT_OPEN_RANGE(i, 0, (int)m_size);
                pKey_i = m_p + i;
@@ -506,6 +543,8 @@ namespace lzham
                if (!m) break;
                cmp = -cmp;
                i += (((m + 1) >> 1) ^ cmp) - cmp;
+               if (i < 0)
+                  break;
             }
          }
 
@@ -547,6 +586,7 @@ namespace lzham
       T*       m_p;
       uint     m_size;
       uint     m_capacity;
+      lzham_malloc_context m_malloc_context;
 
       template<typename Q> struct is_vector { enum { cFlag = false }; };
       template<typename Q> struct is_vector< vector<Q> > { enum { cFlag = true }; };

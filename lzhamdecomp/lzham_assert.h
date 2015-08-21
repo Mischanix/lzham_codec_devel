@@ -2,6 +2,24 @@
 // See Copyright Notice and license at the end of include/lzham.h
 #pragma once
 
+#if LZHAM_ERROR_LOGGING
+   #if LZHAM_VERBOSE_ERROR_LOGGING
+      #define LZHAM_LOG_ERROR(idx) do { lzham_log_error(__FUNCTION__, __FILE__, __LINE__, "", idx); } while(0)
+   #else
+      #define LZHAM_LOG_ERROR(idx) do { lzham_log_error(idx); } while(0)
+   #endif
+#else
+   #define LZHAM_LOG_ERROR(idx)
+#endif
+
+#if LZHAM_ERROR_LOGGING
+   #if LZHAM_VERBOSE_ERROR_LOGGING
+      void lzham_log_error(const char *pFunc, const char *pFile, int line, const char *pMsg, int idx);
+   #else
+      void lzham_log_error(int idx);
+   #endif
+#endif
+
 const unsigned int LZHAM_FAIL_EXCEPTION_CODE = 256U;
 void lzham_enable_fail_exceptions(bool enabled);
 

@@ -23,7 +23,7 @@ namespace lzham
          (void)releaseCount, (void)pPreviousCount;
       }
 
-      inline bool wait(uint32 milliseconds = UINT32_MAX)
+      inline bool wait(uint32 milliseconds = cUINT32_MAX)
       {
          (void)milliseconds;
          return true;
@@ -33,7 +33,8 @@ namespace lzham
    class task_pool
    {
    public:
-      inline task_pool() { }
+      inline task_pool(lzham_malloc_context malloc_context) { 
+(void)malloc_context; }
       inline task_pool(uint num_threads) { (void)num_threads; }
       inline ~task_pool() { }
 

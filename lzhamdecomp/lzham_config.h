@@ -19,5 +19,7 @@
       #error DEBUG cannot be defined in LZHAM_BUILD_RELEASE
    #endif
 #endif
+
+// HACK HACK
 #define LZHAM_BUFFERED_PRINTF 0
 #define LZHAM_PERF_SECTIONS 0

@@ -8,7 +8,7 @@
 #include <xbdm.h>
 #endif
 
-#define LZHAM_FORCE_DEBUGGER_PRESENT 1
+#define LZHAM_FORCE_DEBUGGER_PRESENT 0
 
 #ifndef _MSC_VER
 int sprintf_s(char *buffer, size_t sizeOfBuffer, const char *format, ...)
@@ -62,7 +62,9 @@ void lzham_debug_break(void)
 #if LZHAM_USE_WIN32_API
    DebugBreak();
 #elif (TARGET_OS_MAC == 1) && (TARGET_IPHONE_SIMULATOR == 0) && (TARGET_OS_IPHONE == 0)
-   __asm {int 3}
+//   __asm {int 3}
+//   __asm("int $3")
+   assert(0);   
 #else
    assert(0);
 #endif
@@ -79,6 +81,7 @@ void lzham_output_debug_string(const char* p)
 }
 
 #if LZHAM_BUFFERED_PRINTF
+#include <vector>
 // This stuff was a quick hack only intended for debugging/development.
 namespace lzham
 {
@@ -88,7 +91,7 @@ namespace lzham
       char m_buf[cBufSize];
    };
 
-   static lzham::vector<buffered_str> g_buffered_strings;
+   static std::vector<buffered_str> g_buffered_strings;
    static volatile long g_buffered_string_locked;
    
    static void lock_buffered_strings()
@@ -111,47 +114,46 @@ namespace lzham
       atomic_exchange32(&g_buffered_string_locked, 0);
    }
 
-} // namespace lzham
-
-void lzham_buffered_printf(const char *format, ...)
-{
-   format;
-   
-   char buf[lzham::buffered_str::cBufSize];
-   
-   va_list args;
-   va_start(args, format);
-   vsnprintf_s(buf, sizeof(buf), sizeof(buf), format, args);
-   va_end(args);   
-
-   buf[sizeof(buf) - 1] = '\0';
-   
-   lzham::lock_buffered_strings();
-   
-   if (!lzham::g_buffered_strings.capacity())
+   void lzham_buffered_printf(const char *format, ...)
    {
-      lzham::g_buffered_strings.try_reserve(2048);
-   }
+      format;
+   
+      char buf[lzham::buffered_str::cBufSize];
+   
+      va_list args;
+      va_start(args, format);
+      vsnprintf_s(buf, sizeof(buf), sizeof(buf), format, args);
+      va_end(args);   
 
-   if (lzham::g_buffered_strings.try_resize(lzham::g_buffered_strings.size() + 1))
-   {
+      buf[sizeof(buf) - 1] = '\0';
+   
+      lzham::lock_buffered_strings();
+   
+      if (!lzham::g_buffered_strings.capacity())
+      {
+         lzham::g_buffered_strings.reserve(2048);
+      }
+
+      lzham::g_buffered_strings.resize(lzham::g_buffered_strings.size() + 1);
       memcpy(lzham::g_buffered_strings.back().m_buf, buf, sizeof(buf));
+
+      lzham::unlock_buffered_strings();
    }
 
-   lzham::unlock_buffered_strings();
-}
-
-void lzham_flush_buffered_printf()
-{
-   lzham::lock_buffered_strings();
-
-   for (lzham::uint i = 0; i < lzham::g_buffered_strings.size(); i++)
+   void lzham_flush_buffered_printf()
    {
-      printf("%s", lzham::g_buffered_strings[i].m_buf);
+      lzham::lock_buffered_strings();
+
+      for (lzham::uint i = 0; i < lzham::g_buffered_strings.size(); i++)
+      {
+         printf("%s", lzham::g_buffered_strings[i].m_buf);
+      }
+
+      lzham::g_buffered_strings.resize(0);
+
+      lzham::unlock_buffered_strings();
    }
 
-   lzham::g_buffered_strings.try_resize(0);
-
-   lzham::unlock_buffered_strings();
-}
+} // namespace lzham
 #endif   
+

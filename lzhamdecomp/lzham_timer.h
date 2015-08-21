@@ -60,7 +60,7 @@ namespace lzham
       {
          strcpy_s(m_name, pName);
          
-         lzham_buffered_printf("Thread: 0x%08X, BEGIN Time: %3.3fms, Section: %s\n", GetCurrentThreadId(), lzham_timer::ticks_to_ms(m_start_ticks), m_name);
+         lzham_buffered_printf("Thread: 0x%08X, BEGIN Time: %3.3fms, %s\n", GetCurrentThreadId(), lzham_timer::ticks_to_ms(m_start_ticks), m_name);
       }
       
       inline scoped_perf_section(var_args_t, const char *pName, ...) :
@@ -71,7 +71,7 @@ namespace lzham
          vsprintf_s(m_name, sizeof(m_name), pName, args);
          va_end(args);
          
-         lzham_buffered_printf("Thread: 0x%08X, BEGIN Time: %3.3fms, Section: %s\n", GetCurrentThreadId(), lzham_timer::ticks_to_ms(m_start_ticks), m_name);
+         lzham_buffered_printf("Thread: 0x%08X, BEGIN Time: %3.3fms, %s\n", GetCurrentThreadId(), lzham_timer::ticks_to_ms(m_start_ticks), m_name);
       }
    
       inline ~scoped_perf_section()
@@ -79,7 +79,7 @@ namespace lzham
          double end_ms = lzham_timer::get_ms();
          double start_ms = lzham_timer::ticks_to_ms(m_start_ticks);
          
-         lzham_buffered_printf("Thread: 0x%08X, END Time: %3.3fms, Total: %3.3fms, Section: %s\n", GetCurrentThreadId(), end_ms, end_ms - start_ms, m_name);
+         lzham_buffered_printf("Thread: 0x%08X, END   Time: %3.3fms, %s, Total: %3.3fms\n", GetCurrentThreadId(), end_ms, m_name, end_ms - start_ms);
       }
 
    private:

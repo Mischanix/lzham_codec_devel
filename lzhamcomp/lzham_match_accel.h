@@ -7,6 +7,7 @@
 namespace lzham
 {
    const uint cMatchAccelMaxSupportedProbes = 128;
+   const uint cMatchAccelMaxSupportedThreads = 32;
       
    struct node
    {
@@ -32,13 +33,24 @@ namespace lzham
    
    class search_accelerator
    {
+      LZHAM_NO_COPY_OR_ASSIGNMENT_OP(search_accelerator);
+
    public:
-      search_accelerator();
+      search_accelerator(lzham_malloc_context malloc_context);
+
+      lzham_malloc_context get_malloc_context() const { return m_malloc_context; }
 
       // If all_matches is true, the match finder returns all found matches with no filtering.
       // Otherwise, the finder will tend to return lists of matches with mostly unique lengths.
       // For each length, it will discard matches with worse distances (in the coding sense).
-      bool init(CLZBase* pLZBase, task_pool* pPool, uint max_helper_threads, uint max_dict_size, uint max_matches, bool all_matches, uint max_probes);
+      enum 
+      {
+         cFlagDeterministic = 1,
+         cFlagLen2Matches = 2,
+         cFlagHash24 = 4
+      };
+
+      bool init(CLZBase* pLZBase, task_pool* pPool, uint max_helper_threads, uint max_dict_size, uint max_matches, bool all_matches, uint max_probes, uint flags);
       
       void reset();
       void flush();
@@ -98,6 +110,8 @@ namespace lzham
       }
                   
    public:
+      lzham_malloc_context m_malloc_context;
+
       CLZBase* m_pLZBase;
       task_pool* m_pTask_pool;
       uint m_max_helper_threads;
@@ -111,19 +125,18 @@ namespace lzham
       uint m_cur_dict_size;
             
       lzham::vector<uint8> m_dict;
-      
-      enum { cHashSize = 65536 };
+            
       lzham::vector<uint> m_hash;
       lzham::vector<node> m_nodes;
 
       lzham::vector<dict_match> m_matches;
       lzham::vector<atomic32_t> m_match_refs;
-      
-      lzham::vector<uint8> m_hash_thread_index;
-      
+                  
       enum { cDigramHashSize = 4096 };
       lzham::vector<uint> m_digram_hash;
       lzham::vector<uint> m_digram_next;
+
+      lzham::vector<uint> m_thread_dict_offsets[cMatchAccelMaxSupportedThreads];
                                           
       uint m_fill_lookahead_pos;
       uint m_fill_lookahead_size;
@@ -133,12 +146,17 @@ namespace lzham
       uint m_max_matches;
       
       bool m_all_matches;
+
+      bool m_deterministic;
+      bool m_len2_matches;
+      bool m_hash24;
                   
       volatile atomic32_t m_next_match_ref;
       
       volatile atomic32_t m_num_completed_helper_threads;
                   
-      void find_all_matches_callback(uint64 data, void* pData_ptr);
+      void find_all_matches_callback_st(uint64 data, void* pData_ptr);
+      void find_all_matches_callback_mt(uint64 data, void* pData_ptr);
       bool find_all_matches(uint num_bytes);
       bool find_len2_matches();
    };

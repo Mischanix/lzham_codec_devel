@@ -6,8 +6,7 @@
 namespace lzham
 {
    class symbol_codec;
-   class adaptive_arith_data_model;
-
+   
    const uint cSymbolCodecArithMinLen = 0x01000000U;
    const uint cSymbolCodecArithMaxLen = 0xFFFFFFFFU;
 
@@ -19,25 +18,36 @@ namespace lzham
    typedef uint64 bit_cost_t;
    const uint32 cBitCostScaleShift = 24;
    const uint32 cBitCostScale = (1U << cBitCostScaleShift);
-   const bit_cost_t cBitCostMax = UINT64_MAX;
+   const bit_cost_t cBitCostMax = cUINT64_MAX;
 
    inline bit_cost_t convert_to_scaled_bitcost(uint bits) { LZHAM_ASSERT(bits <= 255); uint32 scaled_bits = bits << cBitCostScaleShift; return static_cast<bit_cost_t>(scaled_bits); }
 
    extern uint32 g_prob_cost[cSymbolCodecArithProbScale];
 
-   class raw_quasi_adaptive_huffman_data_model
+   class quasi_adaptive_huffman_data_model
    {
    public:
-      raw_quasi_adaptive_huffman_data_model(bool encoding = false, uint total_syms = 0, uint max_update_interval = 0, uint adapt_rate = 0);
-      raw_quasi_adaptive_huffman_data_model(const raw_quasi_adaptive_huffman_data_model& other);
-      ~raw_quasi_adaptive_huffman_data_model();
+      quasi_adaptive_huffman_data_model(lzham_malloc_context malloc_context = NULL, bool encoding = false, uint total_syms = 0, uint max_update_interval = 0, uint adapt_rate = 0);
+      quasi_adaptive_huffman_data_model(const quasi_adaptive_huffman_data_model& other);
+      ~quasi_adaptive_huffman_data_model();
 
-      bool assign(const raw_quasi_adaptive_huffman_data_model& rhs);
-      raw_quasi_adaptive_huffman_data_model& operator= (const raw_quasi_adaptive_huffman_data_model& rhs);
+      bool assign(const quasi_adaptive_huffman_data_model& rhs);
+      quasi_adaptive_huffman_data_model& operator= (const quasi_adaptive_huffman_data_model& rhs);
       
       void clear();
 
-      bool init2(bool encoding, uint total_syms, uint max_update_interval, uint adapt_rate, const uint16 *pInitial_sym_freq);
+      void set_malloc_context(lzham_malloc_context malloc_context) 
+      { 
+         m_malloc_context = malloc_context; 
+         m_initial_sym_freq.set_malloc_context(malloc_context);
+         m_sym_freq.set_malloc_context(malloc_context);
+         m_codes.set_malloc_context(malloc_context);
+         m_code_sizes.set_malloc_context(malloc_context);
+      }
+
+      lzham_malloc_context get_malloc_context() const { return m_malloc_context; }
+
+      bool init2(lzham_malloc_context context, bool encoding, uint total_syms, uint max_update_interval, uint adapt_rate, const uint16 *pInitial_sym_freq);
       bool reset();
 
       inline uint get_total_syms() const { return m_total_syms; }
@@ -50,6 +60,7 @@ namespace lzham
       inline bit_cost_t get_cost(uint sym) const { return convert_to_scaled_bitcost(m_code_sizes[sym]); }
 
    public:
+      lzham_malloc_context             m_malloc_context;
       lzham::vector<uint16>            m_initial_sym_freq;
 
       lzham::vector<uint16>            m_sym_freq;
@@ -76,15 +87,7 @@ namespace lzham
 
       friend class symbol_codec;
    };
-
-   struct quasi_adaptive_huffman_data_model : public raw_quasi_adaptive_huffman_data_model
-   {
-#if LZHAM_64BIT_POINTERS
-      // Ensures sizeof(quasi_adaptive_huffman_data_model) is 128 bytes on x64 (it's 64 on x86).
-      char m_unused_alignment[128 - sizeof(raw_quasi_adaptive_huffman_data_model)];
-#endif
-   };
-
+      
    class adaptive_bit_model
    {
    public:
@@ -114,40 +117,8 @@ namespace lzham
       uint16 m_bit_0_prob;
 
       friend class symbol_codec;
-      friend class adaptive_arith_data_model;
    };
-
-   // This class is not actually used by LZHAM - it's only here for comparison/experimental purposes.
-   class adaptive_arith_data_model
-   {
-   public:
-      adaptive_arith_data_model(bool encoding = true, uint total_syms = 0);
-      adaptive_arith_data_model(const adaptive_arith_data_model& other);
-      ~adaptive_arith_data_model();
-
-      adaptive_arith_data_model& operator= (const adaptive_arith_data_model& rhs);
-
-      void clear();
-
-      bool init(bool encoding, uint total_syms);
-      bool init(bool encoding, uint total_syms, bool fast_encoding) { LZHAM_NOTE_UNUSED(fast_encoding); return init(encoding, total_syms); }
-      void reset();
-
-      void reset_update_rate();
-
-      bool update(uint sym);
-
-      uint get_total_syms() const { return m_total_syms; }
-      bit_cost_t get_cost(uint sym) const;
-
-   public:
-      uint m_total_syms;
-      typedef lzham::vector<adaptive_bit_model> adaptive_bit_model_vector;
-      adaptive_bit_model_vector m_probs;
-
-      friend class symbol_codec;
-   };
-
+      
 #if LZHAM_CPU_HAS_64BIT_REGISTERS
    #define LZHAM_SYMBOL_CODEC_USE_64_BIT_BUFFER 1
 #else
@@ -156,8 +127,10 @@ namespace lzham
 
    class symbol_codec
    {
+      LZHAM_NO_COPY_OR_ASSIGNMENT_OP(symbol_codec);
+
    public:
-      symbol_codec();
+      symbol_codec(lzham_malloc_context malloc_context);
 
       void reset();
       
@@ -171,8 +144,7 @@ namespace lzham
       bool encode_align_to_byte();
       bool encode(uint sym, quasi_adaptive_huffman_data_model& model);
       bool encode(uint bit, adaptive_bit_model& model, bool update_model = true);
-      bool encode(uint sym, adaptive_arith_data_model& model);
-
+      
       inline uint encode_get_total_bits_written() const { return m_total_bits_written; }
 
       bool stop_encoding(bool support_arith);
@@ -205,12 +177,13 @@ namespace lzham
       int decode_remove_byte_from_bit_buf();
       uint decode(quasi_adaptive_huffman_data_model& model);
       uint decode(adaptive_bit_model& model, bool update_model = true);
-      uint decode(adaptive_arith_data_model& model);
       uint64 stop_decoding();
 
       uint get_total_model_updates() const { return m_total_model_updates; }
 
    public:
+      lzham_malloc_context    m_malloc_context;
+
       const uint8*            m_pDecode_buf;
       const uint8*            m_pDecode_buf_next;
       const uint8*            m_pDecode_buf_end;
@@ -370,41 +343,6 @@ namespace lzham
    } \
 }
 
-#define LZHAM_SYMBOL_CODEC_DECODE_ADAPTIVE_ARITHMETIC(codec, result, model) \
-{ \
-   adaptive_arith_data_model *pArith_data_model; \
-   pArith_data_model = &model; \
-   uint node_index; \
-   node_index = 1; \
-   do \
-   { \
-      while (LZHAM_BUILTIN_EXPECT(arith_length < cSymbolCodecArithMinLen, 0)) \
-      { \
-         uint c; codec.m_saved_node_index = node_index; codec.m_pSaved_model = pArith_data_model; \
-         LZHAM_SYMBOL_CODEC_DECODE_GET_BITS(codec, c, 8); \
-         node_index = codec.m_saved_node_index; pArith_data_model = static_cast<adaptive_arith_data_model *>(codec.m_pSaved_model); \
-         arith_value = (arith_value << 8) | c; \
-         arith_length <<= 8; \
-      } \
-      adaptive_bit_model *pBit_model; pBit_model = &pArith_data_model->m_probs[node_index]; \
-      uint x = pBit_model->m_bit_0_prob * (arith_length >> cSymbolCodecArithProbBits); \
-      uint bit; bit = (arith_value >= x); \
-      if (!bit) \
-      { \
-         pBit_model->m_bit_0_prob += ((cSymbolCodecArithProbScale - pBit_model->m_bit_0_prob) >> cSymbolCodecArithProbMoveBits); \
-         arith_length = x; \
-      } \
-      else \
-      { \
-         pBit_model->m_bit_0_prob -= (pBit_model->m_bit_0_prob >> cSymbolCodecArithProbMoveBits); \
-         arith_value  -= x; \
-         arith_length -= x; \
-      } \
-      node_index = (node_index << 1) + bit; \
-   } while (node_index < pArith_data_model->m_total_syms); \
-   result = node_index - pArith_data_model->m_total_syms; \
-}
-
 #if LZHAM_SYMBOL_CODEC_USE_64_BIT_BUFFER
 #define LZHAM_SYMBOL_CODEC_DECODE_ADAPTIVE_HUFFMAN(codec, result, model) \
 { \
@@ -444,7 +382,7 @@ namespace lzham
    if (LZHAM_BUILTIN_EXPECT(k <= pTables->m_table_max_code, 1)) \
    { \
       uint32 t = pTables->m_lookup[bit_buf >> (symbol_codec::cBitBufSize - pTables->m_table_bits)]; \
-      result = t & UINT16_MAX; \
+      result = t & cUINT16_MAX; \
       len = t >> 16; \
    } \
    else \
@@ -465,7 +403,7 @@ namespace lzham
    uint freq = pModel->m_sym_freq[result]; \
    freq++; \
    pModel->m_sym_freq[result] = static_cast<uint16>(freq); \
-   LZHAM_ASSERT(freq <= UINT16_MAX); \
+   LZHAM_ASSERT(freq <= cUINT16_MAX); \
    if (LZHAM_BUILTIN_EXPECT(--pModel->m_symbols_until_update == 0, 0)) \
    { \
       pModel->update_tables(); \
@@ -501,7 +439,7 @@ namespace lzham
    if (LZHAM_BUILTIN_EXPECT(k <= pTables->m_table_max_code, 1)) \
    { \
       uint32 t = pTables->m_lookup[bit_buf >> (symbol_codec::cBitBufSize - pTables->m_table_bits)]; \
-      result = t & UINT16_MAX; \
+      result = t & cUINT16_MAX; \
       len = t >> 16; \
    } \
    else \
@@ -522,7 +460,7 @@ namespace lzham
    uint freq = pModel->m_sym_freq[result]; \
    freq++; \
    pModel->m_sym_freq[result] = static_cast<uint16>(freq); \
-   LZHAM_ASSERT(freq <= UINT16_MAX); \
+   LZHAM_ASSERT(freq <= cUINT16_MAX); \
    if (LZHAM_BUILTIN_EXPECT(--pModel->m_symbols_until_update == 0, 0)) \
    { \
       pModel->update_tables(); \

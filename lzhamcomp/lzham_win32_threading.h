@@ -20,6 +20,7 @@ namespace lzham
          m_handle = CreateSemaphoreA(NULL, initialCount, maximumCount, pName);
          if (NULL == m_handle)
          {
+            LZHAM_LOG_ERROR(10004);
             LZHAM_FAIL("semaphore: CreateSemaphore() failed");
          }
       }
@@ -39,18 +40,20 @@ namespace lzham
       {
          if (0 == ReleaseSemaphore(m_handle, releaseCount, NULL))
          {
+            LZHAM_LOG_ERROR(10005);
             LZHAM_FAIL("semaphore: ReleaseSemaphore() failed");
          }
       }
 
-      bool wait(uint32 milliseconds = UINT32_MAX)
+      bool wait(uint32 milliseconds = cUINT32_MAX)
       {
-         LZHAM_ASSUME(INFINITE == UINT32_MAX);
+         LZHAM_ASSUME(INFINITE == cUINT32_MAX);
 
          DWORD result = WaitForSingleObject(m_handle, milliseconds);
 
          if (WAIT_FAILED == result)
          {
+            LZHAM_LOG_ERROR(10003);
             LZHAM_FAIL("semaphore: WaitForSingleObject() failed");
          }
 
@@ -65,7 +68,8 @@ namespace lzham
    class tsstack
    {
    public:
-      inline tsstack(bool use_freelist = true) :
+      inline tsstack(lzham_malloc_context malloc_context, bool use_freelist = true) :
+         m_malloc_context(malloc_context),
          m_use_freelist(use_freelist)
       {
          LZHAM_VERIFY(((ptr_bits_t)this & (LZHAM_GET_ALIGNMENT(tsstack) - 1)) == 0);
@@ -90,7 +94,7 @@ namespace lzham
 
             helpers::destruct(&pNode->m_obj);
 
-            lzham_free(pNode);
+            lzham_free(m_malloc_context, pNode);
          }
 
          flush_freelist();
@@ -109,7 +113,7 @@ namespace lzham
 
             LZHAM_MEMORY_IMPORT_BARRIER
 
-            lzham_free(pNode);
+            lzham_free(m_malloc_context, pNode);
          }
       }
 
@@ -148,12 +152,14 @@ namespace lzham
    private:
       SLIST_HEADER m_stack_head;
       SLIST_HEADER m_freelist_head;
-
+      
       struct node
       {
          SLIST_ENTRY m_slist_entry;
          T m_obj;
       };
+
+      lzham_malloc_context m_malloc_context;
 
       bool m_use_freelist;
 
@@ -162,7 +168,7 @@ namespace lzham
          node* pNode = m_use_freelist ? (node*)InterlockedPopEntrySList(&m_freelist_head) : NULL;
 
          if (!pNode)
-            pNode = (node*)lzham_malloc(sizeof(node));
+            pNode = (node*)lzham_malloc(m_malloc_context, sizeof(node));
 
          return pNode;
       }
@@ -172,16 +178,20 @@ namespace lzham
          if (m_use_freelist)
             InterlockedPushEntrySList(&m_freelist_head, &pNode->m_slist_entry);
          else
-            lzham_free(pNode);
+            lzham_free(m_malloc_context, pNode);
       }
    };
 
    class task_pool
    {
+      LZHAM_NO_COPY_OR_ASSIGNMENT_OP(task_pool);
+
    public:
-      task_pool();
-      task_pool(uint num_threads);
+      task_pool(lzham_malloc_context malloc_context);
+      task_pool(lzham_malloc_context malloc_context, uint num_threads);
       ~task_pool();
+
+      lzham_malloc_context get_malloc_context() const { return m_malloc_context; }
 
       enum { cMaxThreads = LZHAM_MAX_HELPER_THREADS };
       bool init(uint num_threads);
@@ -228,6 +238,8 @@ namespace lzham
          uint m_flags;
       };
 
+      lzham_malloc_context m_malloc_context;
+
       tsstack<task> m_task_stack;
 
       uint m_num_threads;
@@ -258,7 +270,8 @@ namespace lzham
    class object_task : public task_pool::executable_task
    {
    public:
-      object_task(uint flags = cObjectTaskFlagDefault) :
+      object_task(lzham_malloc_context malloc_context, uint flags = cObjectTaskFlagDefault) :
+         m_malloc_context(malloc_context),
          m_pObject(NULL),
          m_pMethod(NULL),
          m_flags(flags)
@@ -267,7 +280,8 @@ namespace lzham
 
       typedef void (T::*object_method_ptr)(uint64 data, void* pData_ptr);
 
-      object_task(T* pObject, object_method_ptr pMethod, uint flags = cObjectTaskFlagDefault) :
+      object_task(lzham_malloc_context malloc_context, T* pObject, object_method_ptr pMethod, uint flags = cObjectTaskFlagDefault) :
+         m_malloc_context(malloc_context),
          m_pObject(pObject),
          m_pMethod(pMethod),
          m_flags(flags)
@@ -275,10 +289,11 @@ namespace lzham
          LZHAM_ASSERT(pObject && pMethod);
       }
 
-      void init(T* pObject, object_method_ptr pMethod, uint flags = cObjectTaskFlagDefault)
+      void init(lzham_malloc_context malloc_context, T* pObject, object_method_ptr pMethod, uint flags = cObjectTaskFlagDefault)
       {
          LZHAM_ASSERT(pObject && pMethod);
 
+         m_malloc_context = malloc_context;
          m_pObject = pObject;
          m_pMethod = pMethod;
          m_flags = flags;
@@ -292,10 +307,11 @@ namespace lzham
          (m_pObject->*m_pMethod)(data, pData_ptr);
 
          if (m_flags & cObjectTaskFlagDeleteAfterExecution)
-            lzham_delete(this);
+            lzham_delete(m_malloc_context, this);
       }
 
    protected:
+      lzham_malloc_context m_malloc_context;
       T* m_pObject;
 
       object_method_ptr m_pMethod;
@@ -306,7 +322,7 @@ namespace lzham
    template<typename S, typename T>
    inline bool task_pool::queue_object_task(S* pObject, T pObject_method, uint64 data, void* pData_ptr)
    {
-      object_task<S> *pTask = lzham_new< object_task<S> >(pObject, pObject_method, cObjectTaskFlagDeleteAfterExecution);
+      object_task<S> *pTask = lzham_new< object_task<S> >(m_malloc_context, m_malloc_context, pObject, pObject_method, cObjectTaskFlagDeleteAfterExecution);
       if (!pTask)
          return false;
       return queue_task(pTask, data, pData_ptr);
@@ -323,12 +339,13 @@ namespace lzham
 
       bool status = true;
 
-      uint i;
-      for (i = 0; i < num_tasks; i++)
+      uint total_to_release = 0;
+
+      for (int i = num_tasks - 1; i >= 0; --i)
       {
          task tsk;
 
-         tsk.m_pObj = lzham_new< object_task<S> >(pObject, pObject_method, cObjectTaskFlagDeleteAfterExecution);
+         tsk.m_pObj = lzham_new< object_task<S> >(m_malloc_context, m_malloc_context, pObject, pObject_method, cObjectTaskFlagDeleteAfterExecution);
          if (!tsk.m_pObj)
          {
             status = false;
@@ -344,13 +361,15 @@ namespace lzham
             status = false;
             break;
          }
+
+         total_to_release++;
       }
 
-      if (i)
+      if (total_to_release)
       {
-         atomic_add32(&m_num_outstanding_tasks, i);
+         atomic_add32(&m_num_outstanding_tasks, total_to_release);
 
-         m_tasks_available.release(i);
+         m_tasks_available.release(total_to_release);
       }
 
       return status;

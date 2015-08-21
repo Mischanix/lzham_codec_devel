@@ -9,6 +9,7 @@
 
 namespace lzham
 {
+
    struct CLZBase : CLZDecompBase
    {
       static uint8 m_slot_tab0[4096];

@@ -64,8 +64,19 @@ namespace lzham
          return m_dist;
    }
 
-   lzcompressor::state::state()
+   lzcompressor::state::state(lzham_malloc_context malloc_context) :
+      m_malloc_context(malloc_context),
+      m_lit_table(malloc_context),
+      m_delta_lit_table(malloc_context),
+      m_main_table(malloc_context),
+      m_dist_lsb_table(malloc_context)
    {
+      for (uint i = 0; i < 2; i++)
+      {
+         m_rep_len_table[i].set_malloc_context(malloc_context);
+         m_large_len_table[i].set_malloc_context(malloc_context);
+      }
+
 		m_cur_ofs = 0;
 		m_cur_state = 0;
 		m_block_start_dict_ofs = 0;
@@ -140,26 +151,50 @@ namespace lzham
       m_cur_ofs = 0;
       m_cur_state = 0;
 
-      if (!m_rep_len_table[0].init2(true, CLZBase::cNumHugeMatchCodes + (CLZBase::cMaxMatchLen - CLZBase::cMinMatchLen + 1), table_max_update_interval, table_update_interval_slow_rate, NULL))
+      if (!m_rep_len_table[0].init2(m_malloc_context, true, CLZBase::cNumHugeMatchCodes + (CLZBase::cMaxMatchLen - CLZBase::cMinMatchLen + 1), table_max_update_interval, table_update_interval_slow_rate, NULL))
+      {
+         LZHAM_LOG_ERROR(8000);
          return false;
+      }
       if (!m_rep_len_table[1].assign(m_rep_len_table[0])) 
+      {
+         LZHAM_LOG_ERROR(8001);
          return false;
+      }
       
-      if (!m_large_len_table[0].init2(true, CLZBase::cNumHugeMatchCodes + CLZBase::cLZXNumSecondaryLengths, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      if (!m_large_len_table[0].init2(m_malloc_context, true, CLZBase::cNumHugeMatchCodes + CLZBase::cLZXNumSecondaryLengths, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      {
+         LZHAM_LOG_ERROR(8002);
          return false;
+      }
       if (!m_large_len_table[1].assign(m_large_len_table[0])) 
+      {
+         LZHAM_LOG_ERROR(8003);
          return false;
+      }
 
-      if (!m_main_table.init2(true, CLZBase::cLZXNumSpecialLengths + (lzbase.m_num_lzx_slots - CLZBase::cLZXLowestUsableMatchSlot) * 8, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      if (!m_main_table.init2(m_malloc_context, true, CLZBase::cLZXNumSpecialLengths + (lzbase.m_num_lzx_slots - CLZBase::cLZXLowestUsableMatchSlot) * 8, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      {
+         LZHAM_LOG_ERROR(8004);
          return false;
-      if (!m_dist_lsb_table.init2(true, 16, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      }
+      if (!m_dist_lsb_table.init2(m_malloc_context, true, 16, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      {
+         LZHAM_LOG_ERROR(8005);
          return false;
+      }
 
-      if (!m_lit_table.init2(true, 256, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      if (!m_lit_table.init2(m_malloc_context, true, 256, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      {
+         LZHAM_LOG_ERROR(8006);
          return false;
+      }
       
-      if (!m_delta_lit_table.init2(true, 256, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      if (!m_delta_lit_table.init2(m_malloc_context, true, 256, table_max_update_interval, table_update_interval_slow_rate, NULL))
+      {
+         LZHAM_LOG_ERROR(8007);  
          return false;
+      }
       
       m_match_hist[0] = 1;
       m_match_hist[1] = 1;
@@ -610,7 +645,11 @@ namespace lzham
          if (m_cur_state < CLZBase::cNumLitStates)
          {
             // literal
-            if (!m_lit_table.update_sym(lit)) return false;
+            if (!m_lit_table.update_sym(lit)) 
+            {
+               LZHAM_LOG_ERROR(8008);
+               return false;
+            }
          }
          else
          {
@@ -619,7 +658,11 @@ namespace lzham
             
             uint delta_lit = rep_lit0 ^ lit;
 				            
-            if (!m_delta_lit_table.update_sym(delta_lit)) return false;
+            if (!m_delta_lit_table.update_sym(delta_lit)) 
+            {
+               LZHAM_LOG_ERROR(8009);
+               return false;
+            }
          }
 
          if (m_cur_state < 4) m_cur_state = 0; else if (m_cur_state < 10) m_cur_state -= 3; else m_cur_state -= 6;
@@ -653,11 +696,19 @@ namespace lzham
 
                   if (lzdec.m_len > CLZBase::cMaxMatchLen)
                   {
-                     if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen)) return false;
+                     if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen)) 
+                     {
+                        LZHAM_LOG_ERROR(8010);
+                        return false;
+                     }
                   }
                   else
                   {
-                     if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym(lzdec.m_len - CLZBase::cMinMatchLen)) return false;
+                     if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym(lzdec.m_len - CLZBase::cMinMatchLen)) 
+                     {
+                        LZHAM_LOG_ERROR(8011);
+                        return false;
+                     }
                   }
 
                   m_cur_state = (m_cur_state < CLZBase::cNumLitStates) ? 8 : 11;
@@ -670,11 +721,19 @@ namespace lzham
 
                if (lzdec.m_len > CLZBase::cMaxMatchLen)
                {
-                  if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen)) return false;
+                  if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen)) 
+                  {
+                     LZHAM_LOG_ERROR(8012);
+                     return false;
+                  }
                }
                else
                {
-                  if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym(lzdec.m_len - CLZBase::cMinMatchLen)) return false;
+                  if (!m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym(lzdec.m_len - CLZBase::cMinMatchLen)) 
+                  {
+                     LZHAM_LOG_ERROR(8013);
+                     return false;
+                  }
                }
 
                if (match_hist_index == 1)
@@ -742,24 +801,40 @@ namespace lzham
 
             uint main_sym = match_low_sym | (match_high_sym << 3);
 
-            if (!m_main_table.update_sym(CLZBase::cLZXNumSpecialLengths + main_sym)) return false;
+            if (!m_main_table.update_sym(CLZBase::cLZXNumSpecialLengths + main_sym)) 
+            {
+               LZHAM_LOG_ERROR(8014);
+               return false;
+            }
 
             if (large_len_sym >= 0)
             {
                if (lzdec.m_len > CLZBase::cMaxMatchLen)
                {
-                  if (!m_large_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym((CLZBase::cMaxMatchLen + 1) - 9)) return false;
+                  if (!m_large_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym((CLZBase::cMaxMatchLen + 1) - 9)) 
+                  {
+                     LZHAM_LOG_ERROR(8015);
+                     return false;
+                  }
                }
                else
                {
-                  if (!m_large_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym(large_len_sym)) return false;
+                  if (!m_large_len_table[m_cur_state >= CLZBase::cNumLitStates].update_sym(large_len_sym)) 
+                  {
+                     LZHAM_LOG_ERROR(8016);
+                     return false;
+                  }
                }
             }
 
             uint num_extra_bits = lzbase.m_lzx_position_extra_bits[match_slot];
             if (num_extra_bits >= 3)
             {
-               if (!m_dist_lsb_table.update_sym(match_extra & 15)) return false;
+               if (!m_dist_lsb_table.update_sym(match_extra & 15)) 
+               {
+                  LZHAM_LOG_ERROR(8017);
+                  return false;
+               }
             }
 
             update_match_hist(lzdec.m_dist);
@@ -777,20 +852,32 @@ namespace lzham
       //const uint lit_pred0 = get_pred_char(dict, lzdec.m_pos, 1);
 
       uint is_match_model_index = LZHAM_IS_MATCH_MODEL_INDEX(m_cur_state);
-      if (!codec.encode(lzdec.is_match(), m_is_match_model[is_match_model_index])) return false;
+      if (!codec.encode(lzdec.is_match(), m_is_match_model[is_match_model_index])) 
+      {
+         LZHAM_LOG_ERROR(8018);
+         return false;
+      }
 
       if (!lzdec.is_match())
       {
          const uint lit = dict[lzdec.m_pos];
 
 #ifdef LZHAM_LZDEBUG
-         if (!codec.encode_bits(lit, 8)) return false;
+         if (!codec.encode_bits(lit, 8)) 
+         {
+            LZHAM_LOG_ERROR(8019);  
+            return false;
+         }
 #endif
 
          if (m_cur_state < CLZBase::cNumLitStates)
          {
             // literal
-            if (!codec.encode(lit, m_lit_table)) return false;
+            if (!codec.encode(lit, m_lit_table)) 
+            {
+               LZHAM_LOG_ERROR(8020);
+               return false;
+            }
          }
          else
          {
@@ -800,10 +887,18 @@ namespace lzham
             uint delta_lit = rep_lit0 ^ lit;
 
 #ifdef LZHAM_LZDEBUG
-            if (!codec.encode_bits(rep_lit0, 8)) return false;
+            if (!codec.encode_bits(rep_lit0, 8)) 
+            {
+               LZHAM_LOG_ERROR(8021);
+               return false;
+            }
 #endif
 
-            if (!codec.encode(delta_lit, m_delta_lit_table)) return false;
+            if (!codec.encode(delta_lit, m_delta_lit_table)) 
+            {
+               LZHAM_LOG_ERROR(8022);
+               return false;
+            }
          }
 
          if (m_cur_state < 4) m_cur_state = 0; else if (m_cur_state < 10) m_cur_state -= 3; else m_cur_state -= 6;
@@ -814,35 +909,63 @@ namespace lzham
          if (lzdec.m_dist < 0)
          {
             // rep match
-            if (!codec.encode(1, m_is_rep_model[m_cur_state])) return false;
+            if (!codec.encode(1, m_is_rep_model[m_cur_state])) 
+            {
+               LZHAM_LOG_ERROR(8023);
+               return false;
+            }
 
             int match_hist_index = -lzdec.m_dist - 1;
 
             if (!match_hist_index)
             {
                // rep0 match
-               if (!codec.encode(1, m_is_rep0_model[m_cur_state])) return false;
+               if (!codec.encode(1, m_is_rep0_model[m_cur_state])) 
+               {
+                  LZHAM_LOG_ERROR(8024);
+                  return false;
+               }
 
                if (lzdec.m_len == 1)
                {
                   // single byte rep0
-                  if (!codec.encode(1, m_is_rep0_single_byte_model[m_cur_state])) return false;
+                  if (!codec.encode(1, m_is_rep0_single_byte_model[m_cur_state])) 
+                  {
+                     LZHAM_LOG_ERROR(8025);
+                     return false;
+                  }
 
                   m_cur_state = (m_cur_state < CLZBase::cNumLitStates) ? 9 : 11;
                }
                else
                {
                   // normal rep0
-                  if (!codec.encode(0, m_is_rep0_single_byte_model[m_cur_state])) return false;
+                  if (!codec.encode(0, m_is_rep0_single_byte_model[m_cur_state])) 
+                  {
+                     LZHAM_LOG_ERROR(8026);
+                     return false;
+                  }
 
                   if (lzdec.m_len > CLZBase::cMaxMatchLen)
                   {
-                     if (!codec.encode((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) return false;
-                     if (!codec.encode_bits(get_huge_match_code_bits(lzdec.m_len), get_huge_match_code_len(lzdec.m_len))) return false;
+                     if (!codec.encode((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) 
+                     {
+                        LZHAM_LOG_ERROR(8027);
+                        return false;
+                     }
+                     if (!codec.encode_bits(get_huge_match_code_bits(lzdec.m_len), get_huge_match_code_len(lzdec.m_len))) 
+                     {
+                        LZHAM_LOG_ERROR(8028);
+                        return false;
+                     }
                   }
                   else
                   {
-                     if (!codec.encode(lzdec.m_len - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) return false;
+                     if (!codec.encode(lzdec.m_len - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) 
+                     {
+                        LZHAM_LOG_ERROR(8029);
+                        return false;
+                     }
                   }
 
                   m_cur_state = (m_cur_state < CLZBase::cNumLitStates) ? 8 : 11;
@@ -851,33 +974,61 @@ namespace lzham
             else
             {
                // rep1-rep3 match
-               if (!codec.encode(0, m_is_rep0_model[m_cur_state])) return false;
+               if (!codec.encode(0, m_is_rep0_model[m_cur_state])) 
+               {
+                  LZHAM_LOG_ERROR(8030);
+                  return false;
+               }
 
                if (lzdec.m_len > CLZBase::cMaxMatchLen)
                {
-                  if (!codec.encode((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) return false;
-                  if (!codec.encode_bits(get_huge_match_code_bits(lzdec.m_len), get_huge_match_code_len(lzdec.m_len))) return false;
+                  if (!codec.encode((CLZBase::cMaxMatchLen + 1) - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) 
+                  {
+                     LZHAM_LOG_ERROR(8031);
+                     return false;
+                  }
+                  if (!codec.encode_bits(get_huge_match_code_bits(lzdec.m_len), get_huge_match_code_len(lzdec.m_len))) 
+                  {
+                     LZHAM_LOG_ERROR(8032);
+                     return false;
+                  }
                }
                else
                {
-                  if (!codec.encode(lzdec.m_len - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) return false;
+                  if (!codec.encode(lzdec.m_len - CLZBase::cMinMatchLen, m_rep_len_table[m_cur_state >= CLZBase::cNumLitStates])) 
+                  {
+                     LZHAM_LOG_ERROR(8033);
+                     return false;
+                  }
                }
 
                if (match_hist_index == 1)
                {
                   // rep1
-                  if (!codec.encode(1, m_is_rep1_model[m_cur_state])) return false;
+                  if (!codec.encode(1, m_is_rep1_model[m_cur_state])) 
+                  {
+                     LZHAM_LOG_ERROR(8034);
+                     return false;
+                  }
 
                   std::swap(m_match_hist[0], m_match_hist[1]);
                }
                else
                {
-                  if (!codec.encode(0, m_is_rep1_model[m_cur_state])) return false;
+                  if (!codec.encode(0, m_is_rep1_model[m_cur_state])) 
+                  {  
+                     LZHAM_LOG_ERROR(8035);
+                     return false;
+                  }
 
                   if (match_hist_index == 2)
                   {
                      // rep2
-                     if (!codec.encode(1, m_is_rep2_model[m_cur_state])) return false;
+                     if (!codec.encode(1, m_is_rep2_model[m_cur_state])) 
+                     {
+                        LZHAM_LOG_ERROR(8036);
+                        return false;
+                     }
 
                      int dist = m_match_hist[2];
                      m_match_hist[2] = m_match_hist[1];
@@ -887,7 +1038,11 @@ namespace lzham
                   else
                   {
                      // rep3
-                     if (!codec.encode(0, m_is_rep2_model[m_cur_state])) return false;
+                     if (!codec.encode(0, m_is_rep2_model[m_cur_state])) 
+                     {
+                        LZHAM_LOG_ERROR(8037);  
+                        return false;
+                     }
 
                      int dist = m_match_hist[3];
                      m_match_hist[3] = m_match_hist[2];
@@ -902,7 +1057,11 @@ namespace lzham
          }
          else
          {
-            if (!codec.encode(0, m_is_rep_model[m_cur_state])) return false;
+            if (!codec.encode(0, m_is_rep_model[m_cur_state])) 
+            {
+               LZHAM_LOG_ERROR(8038);
+               return false;
+            }
 
             LZHAM_ASSERT(lzdec.m_len >= CLZBase::cMinMatchLen);
 
@@ -928,34 +1087,62 @@ namespace lzham
 
             uint main_sym = match_low_sym | (match_high_sym << 3);
 
-            if (!codec.encode(CLZBase::cLZXNumSpecialLengths + main_sym, m_main_table)) return false;
+            if (!codec.encode(CLZBase::cLZXNumSpecialLengths + main_sym, m_main_table)) 
+            {  
+               LZHAM_LOG_ERROR(8039);
+               return false;
+            }
 
             if (large_len_sym >= 0)
             {
                if (lzdec.m_len > CLZBase::cMaxMatchLen)
                {
-                  if (!codec.encode((CLZBase::cMaxMatchLen + 1) - 9, m_large_len_table[m_cur_state >= CLZBase::cNumLitStates])) return false;
-                  if (!codec.encode_bits(get_huge_match_code_bits(lzdec.m_len), get_huge_match_code_len(lzdec.m_len))) return false;
+                  if (!codec.encode((CLZBase::cMaxMatchLen + 1) - 9, m_large_len_table[m_cur_state >= CLZBase::cNumLitStates])) 
+                  {
+                     LZHAM_LOG_ERROR(8040);
+                     return false;
+                  }
+                  if (!codec.encode_bits(get_huge_match_code_bits(lzdec.m_len), get_huge_match_code_len(lzdec.m_len))) 
+                  {
+                     LZHAM_LOG_ERROR(8041);
+                     return false;
+                  }
                }
                else
                {
-                  if (!codec.encode(large_len_sym, m_large_len_table[m_cur_state >= CLZBase::cNumLitStates])) return false;
+                  if (!codec.encode(large_len_sym, m_large_len_table[m_cur_state >= CLZBase::cNumLitStates])) 
+                  {
+                     LZHAM_LOG_ERROR(8042);
+                     return false;
+                  }
                }
             }
 
             uint num_extra_bits = lzbase.m_lzx_position_extra_bits[match_slot];
             if (num_extra_bits < 3)
             {
-               if (!codec.encode_bits(match_extra, num_extra_bits)) return false;
+               if (!codec.encode_bits(match_extra, num_extra_bits)) 
+               {
+                  LZHAM_LOG_ERROR(8043);
+                  return false;
+               }
             }
             else
             {
                if (num_extra_bits > 4)
                {
-                  if (!codec.encode_bits((match_extra >> 4), num_extra_bits - 4)) return false;
+                  if (!codec.encode_bits((match_extra >> 4), num_extra_bits - 4)) 
+                  {
+                     LZHAM_LOG_ERROR(8044);
+                     return false;
+                  }
                }
 
-               if (!codec.encode(match_extra & 15, m_dist_lsb_table)) return false;
+               if (!codec.encode(match_extra & 15, m_dist_lsb_table)) 
+               {
+                  LZHAM_LOG_ERROR(8045);
+                  return false;
+               }
             }
 
             update_match_hist(lzdec.m_dist);
@@ -964,7 +1151,11 @@ namespace lzham
          }
 
 #ifdef LZHAM_LZDEBUG
-         if (!codec.encode_bits(m_match_hist[0], 29)) return false;
+         if (!codec.encode_bits(m_match_hist[0], 29)) 
+         {
+            LZHAM_LOG_ERROR(8046);
+            return false;
+         }
 #endif
       }
 
@@ -1083,19 +1274,44 @@ namespace lzham
    {
       LZHAM_NOTE_UNUSED(dict);
       LZHAM_NOTE_UNUSED(dict_pos);
+
 #ifdef LZHAM_LZDEBUG
-      if (!codec.encode_bits(CLZBase::cLZHAMDebugSyncMarkerValue, CLZBase::cLZHAMDebugSyncMarkerBits)) return false;
-      if (!codec.encode_bits(1, 1)) return false;
-      if (!codec.encode_bits(0, 17)) return false;
-      if (!codec.encode_bits(m_cur_state, 4)) return false;
+      if (!codec.encode_bits(CLZBase::cLZHAMDebugSyncMarkerValue, CLZBase::cLZHAMDebugSyncMarkerBits)) 
+      {
+         LZHAM_LOG_ERROR(8047);
+         return false;
+      }
+      if (!codec.encode_bits(1, 1)) 
+      {
+         LZHAM_LOG_ERROR(8048);
+         return false;
+      }
+      if (!codec.encode_bits(0, 17)) 
+      {
+         LZHAM_LOG_ERROR(8049);
+         return false;
+      }
+      if (!codec.encode_bits(m_cur_state, 4)) 
+      {
+         LZHAM_LOG_ERROR(8050);
+         return false;
+      }
 #endif
 
       //const uint match_pred = get_pred_char(dict, dict_pos, 1);
       uint is_match_model_index = LZHAM_IS_MATCH_MODEL_INDEX(m_cur_state);
-      if (!codec.encode(1, m_is_match_model[is_match_model_index])) return false;
+      if (!codec.encode(1, m_is_match_model[is_match_model_index])) 
+      {
+         LZHAM_LOG_ERROR(8051);
+         return false;
+      }
 
       // full match
-      if (!codec.encode(0, m_is_rep_model[m_cur_state])) return false;
+      if (!codec.encode(0, m_is_rep_model[m_cur_state])) 
+      {
+         LZHAM_LOG_ERROR(8052);     
+         return false;
+      }
 
       return codec.encode(CLZBase::cLZXSpecialCodeEndOfBlockCode, m_main_table);
    }
@@ -1104,22 +1320,50 @@ namespace lzham
    {
       LZHAM_NOTE_UNUSED(dict);
       LZHAM_NOTE_UNUSED(dict_pos);
+
 #ifdef LZHAM_LZDEBUG
-      if (!codec.encode_bits(CLZBase::cLZHAMDebugSyncMarkerValue, CLZBase::cLZHAMDebugSyncMarkerBits)) return false;
-      if (!codec.encode_bits(1, 1)) return false;
-      if (!codec.encode_bits(0, 17)) return false;
-      if (!codec.encode_bits(m_cur_state, 4)) return false;
+      if (!codec.encode_bits(CLZBase::cLZHAMDebugSyncMarkerValue, CLZBase::cLZHAMDebugSyncMarkerBits)) 
+      {  
+         LZHAM_LOG_ERROR(8053);
+         return false;  
+      }
+      if (!codec.encode_bits(1, 1)) 
+      {
+         LZHAM_LOG_ERROR(8054);  
+         return false;
+      }
+      if (!codec.encode_bits(0, 17)) 
+      {
+         LZHAM_LOG_ERROR(8055);  
+         return false;
+      }
+      if (!codec.encode_bits(m_cur_state, 4)) 
+      {  
+         LZHAM_LOG_ERROR(8056);
+         return false;
+      }
 #endif
 
       //const uint match_pred = get_pred_char(dict, dict_pos, 1);
       uint is_match_model_index = LZHAM_IS_MATCH_MODEL_INDEX(m_cur_state);
-      if (!codec.encode(1, m_is_match_model[is_match_model_index])) return false;
+      if (!codec.encode(1, m_is_match_model[is_match_model_index])) 
+      {
+         LZHAM_LOG_ERROR(8057);
+         return false;
+      }
 
       // full match
-      if (!codec.encode(0, m_is_rep_model[m_cur_state])) return false;
+      if (!codec.encode(0, m_is_rep_model[m_cur_state])) 
+      {
+         LZHAM_LOG_ERROR(8058);  
+         return false;
+      }
 
       if (!codec.encode(CLZBase::cLZXSpecialCodePartialStateReset, m_main_table))
+      {
+         LZHAM_LOG_ERROR(8059);
          return false;
+      }
 
       reset_state_partial();
       return true;
@@ -1177,6 +1421,33 @@ namespace lzham
          m_large_len_table[i].reset_update_rate();
 
       m_dist_lsb_table.reset_update_rate();
+   }
+
+   void lzcompressor::state::reset_tables()
+   {
+      for (uint i = 0; i < LZHAM_ARRAY_SIZE(m_is_match_model); i++) 
+         m_is_match_model[i].clear();
+      for (uint i = 0; i < LZHAM_ARRAY_SIZE(m_is_rep_model); i++) 
+         m_is_rep_model[i].clear();
+      for (uint i = 0; i < LZHAM_ARRAY_SIZE(m_is_rep0_model); i++) 
+         m_is_rep0_model[i].clear();
+      for (uint i = 0; i < LZHAM_ARRAY_SIZE(m_is_rep0_single_byte_model); i++) 
+         m_is_rep0_single_byte_model[i].clear();
+      for (uint i = 0; i < LZHAM_ARRAY_SIZE(m_is_rep1_model); i++) 
+         m_is_rep1_model[i].clear();
+      for (uint i = 0; i < LZHAM_ARRAY_SIZE(m_is_rep2_model); i++) 
+         m_is_rep2_model[i].clear();
+
+      for (uint i = 0; i < 2; i++)
+      {
+         m_rep_len_table[i].reset();
+         m_large_len_table[i].reset();
+      }
+      m_main_table.reset();
+      m_dist_lsb_table.reset();
+
+      m_lit_table.reset();
+      m_delta_lit_table.reset();
    }
 
    void lzcompressor::coding_stats::clear()

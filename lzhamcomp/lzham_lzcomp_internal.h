@@ -11,7 +11,10 @@ namespace lzham
 
    const uint cMaxParseGraphNodes = 3072;
    const uint cMaxParseThreads = 8;
-
+      
+   const uint cMaxParseNodeStates = LZHAM_EXTREME_PARSING_MAX_BEST_ARRIVALS_MAX;
+   const uint cDefaultMaxParseNodeStates = 4;
+   
    enum compression_level
    {
       cCompressionLevelFastest,
@@ -26,15 +29,16 @@ namespace lzham
    struct comp_settings
    {
       uint m_fast_bytes;
-      bool m_fast_adaptive_huffman_updating;
       uint m_match_accel_max_matches_per_probe;
       uint m_match_accel_max_probes;
    };
-      
+     
    class lzcompressor : public CLZBase
    {
+      LZHAM_NO_COPY_OR_ASSIGNMENT_OP(lzcompressor);
+
    public:
-      lzcompressor();
+      lzcompressor(lzham_malloc_context malloc_context);
 
       struct init_params
       {
@@ -55,7 +59,9 @@ namespace lzham
             m_pSeed_bytes(0),
             m_num_seed_bytes(0),
             m_table_max_update_interval(0),
-            m_table_update_interval_slow_rate(0)
+            m_table_update_interval_slow_rate(0),
+            m_extreme_parsing_max_best_arrivals(cDefaultMaxParseNodeStates),
+            m_fast_bytes_override(0)
          {
          }
 
@@ -74,6 +80,9 @@ namespace lzham
 			         
          uint m_table_max_update_interval;
          uint m_table_update_interval_slow_rate;
+
+         uint m_extreme_parsing_max_best_arrivals;
+         uint m_fast_bytes_override;
       };
 
       bool init(const init_params& params);
@@ -92,6 +101,8 @@ namespace lzham
       uint32 get_src_adler32() const { return m_src_adler32; }
 
    private:
+      lzham_malloc_context m_malloc_context;
+
       class state;
       
       enum
@@ -182,7 +193,7 @@ namespace lzham
 
          void partial_advance(const lzdecision& lzdec);
          
-         inline void save_partial_state(state_base& dst)
+         inline void save_partial_state(state_base& dst) const
          {
             dst.m_cur_ofs = m_cur_ofs;
             dst.m_cur_state = m_cur_state;
@@ -200,7 +211,24 @@ namespace lzham
       class state : public state_base
       {
       public:
-         state();
+         state(lzham_malloc_context malloc_context = NULL);
+
+         lzham_malloc_context get_malloc_context() const { return m_malloc_context; }
+         
+         void set_malloc_context(lzham_malloc_context context)
+         {
+            m_malloc_context = context;
+          
+            m_lit_table.set_malloc_context(m_malloc_context);
+            m_delta_lit_table.set_malloc_context(m_malloc_context);
+            m_main_table.set_malloc_context(m_malloc_context);
+            for (uint i = 0; i < 2; i++)
+            {
+               m_rep_len_table[i].set_malloc_context(m_malloc_context);
+               m_large_len_table[i].set_malloc_context(m_malloc_context);
+            }
+            m_dist_lsb_table.set_malloc_context(m_malloc_context);
+         }
 
          void clear();
          
@@ -232,6 +260,7 @@ namespace lzham
          void start_of_block(const search_accelerator& dict, uint cur_ofs, uint block_index);
          
          void reset_update_rate();
+         void reset_tables();
 
          uint get_pred_char(const search_accelerator& dict, int pos, int backward_ofs) const;
 
@@ -239,6 +268,8 @@ namespace lzham
          {
             return (!lzdec.is_match()) &&  (m_cur_state >= CLZBase::cNumLitStates);
          }
+
+         lzham_malloc_context m_malloc_context;
          
          uint m_block_start_dict_ofs;
 
@@ -356,6 +387,7 @@ namespace lzham
 
       bool m_finished;
       bool m_use_task_pool;
+      bool m_use_extreme_parsing;
             
       struct node_state
       {
@@ -390,10 +422,10 @@ namespace lzham
          }
          
          uint m_num_node_states;                                    
-         enum { cMaxNodeStates = 4 };
-         node_state m_node_states[cMaxNodeStates];
          
-         void add_state(int parent_index, int parent_state_index, const lzdecision &lzdec, state &parent_state, bit_cost_t total_cost, uint total_complexity);
+         node_state m_node_states[cMaxParseNodeStates];
+         
+         void add_state(int parent_index, int parent_state_index, const lzdecision &lzdec, const state &parent_state, bit_cost_t total_cost, uint total_complexity, uint max_parse_node_states);
       };
 
       state m_start_of_block_state;             // state at start of block
@@ -405,21 +437,39 @@ namespace lzham
          uint m_start_ofs;
          uint m_bytes_to_match;
 
-         state m_initial_state;
+         state m_state;
+         state *m_pState;
 
          node m_nodes[cMaxParseGraphNodes + 1];
-                  
+                                   
          lzham::vector<lzdecision> m_best_decisions;
          bool m_emit_decisions_backwards;
 
          lzham::vector<lzpriced_decision> m_temp_decisions;
 
+         uint m_max_parse_node_states;
          uint m_max_greedy_decisions;
          uint m_greedy_parse_total_bytes_coded;
+
+         uint m_parse_early_out_thresh;
+         uint m_bytes_actually_parsed;
+
          bool m_greedy_parse_gave_up;
          
          bool m_issue_reset_state_partial;
          bool m_failed;
+         bool m_use_semaphore;
+
+         semaphore m_finished;
+
+         bool init(lzcompressor& lzcomp, const lzcompressor::init_params &m_params);
+                  
+         void set_malloc_context(lzham_malloc_context malloc_context)
+         {
+            m_state.set_malloc_context(malloc_context);
+            m_best_decisions.set_malloc_context(malloc_context);
+            m_temp_decisions.set_malloc_context(malloc_context);
+         }
       };
 
       struct parse_thread_state : raw_parse_thread_state
@@ -427,30 +477,11 @@ namespace lzham
          uint8 m_unused_alignment_array[128 - (sizeof(raw_parse_thread_state) & 127)];
       };
 
+      uint m_fast_bytes;
+
       uint m_num_parse_threads;
       parse_thread_state m_parse_thread_state[cMaxParseThreads + 1]; // +1 extra for the greedy parser thread (only used for delta compression)
-
-      volatile atomic32_t m_parse_jobs_remaining;
-      semaphore m_parse_jobs_complete;
-
-      enum { cMaxBlockHistorySize = 6, cBlockHistoryCompRatioScale = 1000U };
-      struct block_history
-      {
-         uint m_comp_size;
-         uint m_src_size;
-         uint m_ratio;
-         bool m_raw_block;
-         bool m_reset_update_rate;
-      };
-      block_history m_block_history[cMaxBlockHistorySize];
-      uint m_block_history_size;
-      uint m_block_history_next;
-      void update_block_history(uint comp_size, uint src_size, uint ratio, bool raw_block, bool reset_update_rate);
-      uint get_recent_block_ratio();
-      uint get_min_block_ratio();
-      uint get_max_block_ratio();
-      uint get_total_recent_reset_update_rate();
-      
+                                    
       bool send_zlib_header();
       bool init_seed_bytes();
       bool send_final_block();

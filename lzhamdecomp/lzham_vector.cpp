@@ -31,11 +31,14 @@ namespace lzham
       size_t actual_size;
       if (!pMover)
       {
-         void* new_p = lzham_realloc(m_p, desired_size, &actual_size, true);
+         void* new_p = lzham_realloc(m_malloc_context, m_p, desired_size, &actual_size, true);
          if (!new_p)
          {
             if (nofail)
+            {
+               LZHAM_LOG_ERROR(5000);
                return false;
+            }
                
             char buf[256];
             sprintf_s(buf, sizeof(buf), "vector: lzham_realloc() failed allocating %u bytes", desired_size);
@@ -45,12 +48,17 @@ namespace lzham
       }
       else
       {
-         void* new_p = lzham_malloc(desired_size, &actual_size);
+         void* new_p = lzham_malloc(m_malloc_context, desired_size, &actual_size);
          if (!new_p)
          {
             if (nofail)
+            {
+               LZHAM_LOG_ERROR(5001);
                return false;
+            }
                
+            LZHAM_LOG_ERROR(5002);
+
             char buf[256];
             sprintf_s(buf, sizeof(buf), "vector: lzham_malloc() failed allocating %u bytes", desired_size);
             LZHAM_FAIL(buf);
@@ -59,7 +67,7 @@ namespace lzham
          (*pMover)(new_p, m_p, m_size);
          
          if (m_p)
-            lzham_free(m_p);
+            lzham_free(m_malloc_context, m_p);
 
          m_p = new_p;
       }            

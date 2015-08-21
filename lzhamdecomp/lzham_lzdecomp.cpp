@@ -13,6 +13,9 @@
 
 using namespace lzham;
 
+// We currently only really need ~35K, adding a few K as a fudge factor.
+#define LZHAM_DECOMP_MEMORY_ARENA_SIZE (38*1024)
+
 namespace lzham
 {
    static const uint8 s_literal_next_state[24] =
@@ -27,6 +30,21 @@ namespace lzham
 
    struct lzham_decompressor
    {
+      lzham_decompressor(lzham_malloc_context malloc_context) : 
+         m_malloc_context(malloc_context),
+         m_codec(malloc_context),
+         m_lit_table(malloc_context),
+         m_delta_lit_table(malloc_context),
+         m_main_table(malloc_context),
+         m_dist_lsb_table(malloc_context)
+      {
+         for (uint i = 0; i < 2; i++)
+         {
+            m_rep_len_table[i].set_malloc_context(malloc_context);
+            m_large_len_table[i].set_malloc_context(malloc_context);
+         }
+      }
+
       void init();
       
       template<bool unbuffered> lzham_decompress_status_t decompress();
@@ -35,6 +53,8 @@ namespace lzham
       void reset_arith_tables();
       void reset_all_tables();
       void reset_huffman_table_update_rates();
+
+      lzham_malloc_context m_malloc_context;
 
       int m_state;
 
@@ -358,7 +378,10 @@ namespace lzham
       }
       
       if (!m_codec.start_decoding(m_pIn_buf, *m_pIn_buf_size, m_no_more_input_bytes_flag, NULL, NULL))
+      {
+         LZHAM_LOG_ERROR(1020);
          return LZHAM_DECOMP_STATUS_FAILED_INITIALIZING;
+      }
 
       LZHAM_SYMBOL_CODEC_DECODE_BEGIN(codec);
 
@@ -370,11 +393,17 @@ namespace lzham
             LZHAM_SYMBOL_CODEC_DECODE_GET_BITS(codec, m_z_flg, 8);
             check = ((m_z_cmf << 8) + m_z_flg) % 31;
             if ((check != 0) || ((m_z_cmf & 15) != LZHAM_Z_LZHAM))
+            {
+               LZHAM_LOG_ERROR(1021);
                return LZHAM_DECOMP_STATUS_FAILED_BAD_ZLIB_HEADER;
+            }
             if (m_z_flg & 32)
             {
                if ((!m_params.m_pSeed_bytes) || (unbuffered))
+               {
+                  LZHAM_LOG_ERROR(1022);
                   return LZHAM_DECOMP_STATUS_FAILED_NEED_SEED_BYTES;
+               }
                m_z_dict_adler32 = 0;
                for (m_tmp = 0; m_tmp < 4; ++m_tmp)
                {
@@ -382,7 +411,10 @@ namespace lzham
                   m_z_dict_adler32 = (m_z_dict_adler32 << 8) | n;
                }
                if (adler32(m_params.m_pSeed_bytes, m_params.m_num_seed_bytes) != m_z_dict_adler32)
+               {
+                  LZHAM_LOG_ERROR(1023);
                   return LZHAM_DECOMP_STATUS_FAILED_BAD_SEED_BYTES;
+               }
             }
          }
 
@@ -403,20 +435,23 @@ namespace lzham
             update_interval_slow_rate = g_table_update_settings[rate].m_slow_rate;
          }
 
-         bool succeeded = m_lit_table.init2(false, 256, max_update_interval, update_interval_slow_rate, NULL);
+         bool succeeded = m_lit_table.init2(m_malloc_context, false, 256, max_update_interval, update_interval_slow_rate, NULL);
          succeeded = succeeded && m_delta_lit_table.assign(m_lit_table);
          
-         succeeded = succeeded && m_main_table.init2(false, CLZDecompBase::cLZXNumSpecialLengths + (m_lzBase.m_num_lzx_slots - CLZDecompBase::cLZXLowestUsableMatchSlot) * 8, max_update_interval, update_interval_slow_rate, NULL);
+         succeeded = succeeded && m_main_table.init2(m_malloc_context, false, CLZDecompBase::cLZXNumSpecialLengths + (m_lzBase.m_num_lzx_slots - CLZDecompBase::cLZXLowestUsableMatchSlot) * 8, max_update_interval, update_interval_slow_rate, NULL);
 
-         succeeded = succeeded && m_rep_len_table[0].init2(false, CLZDecompBase::cNumHugeMatchCodes + (CLZDecompBase::cMaxMatchLen - CLZDecompBase::cMinMatchLen + 1), max_update_interval, update_interval_slow_rate, NULL);
+         succeeded = succeeded && m_rep_len_table[0].init2(m_malloc_context, false, CLZDecompBase::cNumHugeMatchCodes + (CLZDecompBase::cMaxMatchLen - CLZDecompBase::cMinMatchLen + 1), max_update_interval, update_interval_slow_rate, NULL);
          succeeded = succeeded && m_rep_len_table[1].assign(m_rep_len_table[0]);
 
-         succeeded = succeeded && m_large_len_table[0].init2(false, CLZDecompBase::cNumHugeMatchCodes + CLZDecompBase::cLZXNumSecondaryLengths, max_update_interval, update_interval_slow_rate, NULL);
+         succeeded = succeeded && m_large_len_table[0].init2(m_malloc_context, false, CLZDecompBase::cNumHugeMatchCodes + CLZDecompBase::cLZXNumSecondaryLengths, max_update_interval, update_interval_slow_rate, NULL);
          succeeded = succeeded && m_large_len_table[1].assign(m_large_len_table[0]);
 
-         succeeded = succeeded && m_dist_lsb_table.init2(false, 16, max_update_interval, update_interval_slow_rate, NULL);
+         succeeded = succeeded && m_dist_lsb_table.init2(m_malloc_context, false, 16, max_update_interval, update_interval_slow_rate, NULL);
          if (!succeeded)
+         {
+            LZHAM_LOG_ERROR(1024);
             return LZHAM_DECOMP_STATUS_FAILED_INITIALIZING;
+         }
       }
       
       // Output block loop.
@@ -450,7 +485,7 @@ namespace lzham
                LZHAM_SYMBOL_CODEC_DECODE_END(codec);
                *m_pIn_buf_size = static_cast<size_t>(codec.decode_get_bytes_consumed());
                *m_pOut_buf_size = 0;
-               for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_BAD_SYNC_BLOCK); }
+               for ( ; ; ) { LZHAM_LOG_ERROR(1025); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_BAD_SYNC_BLOCK); }
             }
 
             LZHAM_SYMBOL_CODEC_DECODE_GET_BITS(codec, n, 16);
@@ -459,7 +494,7 @@ namespace lzham
                LZHAM_SYMBOL_CODEC_DECODE_END(codec);
                *m_pIn_buf_size = static_cast<size_t>(codec.decode_get_bytes_consumed());
                *m_pOut_buf_size = 0;
-               for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_BAD_SYNC_BLOCK); }
+               for ( ; ; ) { LZHAM_LOG_ERROR(1026); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_BAD_SYNC_BLOCK); }
             }
             
             // See lzcompressor::send_sync_block() (TODO: make these an enum)            
@@ -527,7 +562,7 @@ namespace lzham
                LZHAM_SYMBOL_CODEC_DECODE_END(codec);
                *m_pIn_buf_size = static_cast<size_t>(codec.decode_get_bytes_consumed());
                *m_pOut_buf_size = 0;
-               for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_BAD_RAW_BLOCK); }
+               for ( ; ; ) { LZHAM_LOG_ERROR(1027); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_BAD_RAW_BLOCK); }
             }
             
             num_raw_bytes_remaining++;
@@ -548,7 +583,7 @@ namespace lzham
                   LZHAM_SYMBOL_CODEC_DECODE_END(codec);
                   *m_pIn_buf_size = static_cast<size_t>(codec.decode_get_bytes_consumed());
                   *m_pOut_buf_size = 0;
-                  for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_DEST_BUF_TOO_SMALL); }
+                  for ( ; ; ) { LZHAM_LOG_ERROR(1028); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_DEST_BUF_TOO_SMALL); }
                }
 
                pDst[dst_ofs++] = static_cast<uint8>(b);
@@ -581,7 +616,7 @@ namespace lzham
 
                   if (m_no_more_input_bytes_flag)
                   {
-                     for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_EXPECTED_MORE_RAW_BYTES); }
+                     for ( ; ; ) { LZHAM_LOG_ERROR(1029); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_EXPECTED_MORE_RAW_BYTES); }
                   }
 
                   LZHAM_SAVE_STATE
@@ -605,7 +640,7 @@ namespace lzham
                   // Output buffer is not large enough.
                   *m_pIn_buf_size = static_cast<size_t>(in_buf_ofs);
                   *m_pOut_buf_size = 0;
-                  for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_DEST_BUF_TOO_SMALL); }
+                  for ( ; ; ) { LZHAM_LOG_ERROR(1030); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_DEST_BUF_TOO_SMALL); }
                }
 
                // Copy the raw bytes.
@@ -702,7 +737,7 @@ namespace lzham
                      LZHAM_SYMBOL_CODEC_DECODE_END(codec);
                      *m_pIn_buf_size = static_cast<size_t>(codec.decode_get_bytes_consumed());
                      *m_pOut_buf_size = 0;
-                     for ( ; ; ) { LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_DEST_BUF_TOO_SMALL); }
+                     for ( ; ; ) { LZHAM_LOG_ERROR(1031); LZHAM_CR_RETURN(m_state, LZHAM_DECOMP_STATUS_FAILED_DEST_BUF_TOO_SMALL); }
                   }
 
                   if (LZHAM_BUILTIN_EXPECT(cur_state < CLZDecompBase::cNumLitStates, 1))
@@ -970,6 +1005,7 @@ namespace lzham
 #endif
                   if ( (unbuffered) && LZHAM_BUILTIN_EXPECT((((size_t)match_hist0 > dst_ofs) || ((dst_ofs + match_len) > out_buf_size)), 0) )
                   {
+                     LZHAM_LOG_ERROR(1032);
                      LZHAM_SYMBOL_CODEC_DECODE_END(codec);
                      *m_pIn_buf_size = static_cast<size_t>(codec.decode_get_bytes_consumed());
                      *m_pOut_buf_size = 0;
@@ -1060,6 +1096,7 @@ namespace lzham
          }
          else
          {
+            LZHAM_LOG_ERROR(1033);
             // This block type is currently undefined.
             m_status = LZHAM_DECOMP_STATUS_FAILED_BAD_CODE;
          }
@@ -1092,6 +1129,7 @@ namespace lzham
 
             if (m_file_src_file_adler32 != m_decomp_adler32)
             {
+               LZHAM_LOG_ERROR(1034);
                m_status = LZHAM_DECOMP_STATUS_FAILED_ADLER32;
             }
          }
@@ -1124,17 +1162,29 @@ namespace lzham
    static bool check_params(const lzham_decompress_params *pParams)
    {
       if ((!pParams) || (pParams->m_struct_size != sizeof(lzham_decompress_params)))
+      {
+         LZHAM_LOG_ERROR(1000);
          return false;
+      }
 
       if ((pParams->m_dict_size_log2 < CLZDecompBase::cMinDictSizeLog2) || (pParams->m_dict_size_log2 > CLZDecompBase::cMaxDictSizeLog2))
+      {
+         LZHAM_LOG_ERROR(1001);
          return false;
+      }
 
       if (pParams->m_num_seed_bytes)
       {
          if (((pParams->m_decompress_flags & LZHAM_DECOMP_FLAG_OUTPUT_UNBUFFERED) != 0) || (!pParams->m_pSeed_bytes))
+         {
+            LZHAM_LOG_ERROR(1002);
             return false;
+         }
          if (pParams->m_num_seed_bytes > (1U << pParams->m_dict_size_log2))
+         {
+            LZHAM_LOG_ERROR(1003);
             return false;
+         }
       }
       return true;
    }
@@ -1146,11 +1196,16 @@ namespace lzham
 
       if (!check_params(pParams))
          return NULL;
-      
-      lzham_decompressor *pState = lzham_new<lzham_decompressor>();
-      if (!pState)
-         return NULL;
 
+      lzham_malloc_context malloc_context = lzham_create_malloc_context(LZHAM_DECOMP_MEMORY_ARENA_SIZE);
+      
+      lzham_decompressor *pState = lzham_new<lzham_decompressor>(malloc_context, malloc_context);
+      if (!pState)
+      {
+         lzham_destroy_malloc_context(malloc_context);
+         return NULL;
+      }
+      
       pState->m_params = *pParams;
 
       if (pState->m_params.m_decompress_flags & LZHAM_DECOMP_FLAG_OUTPUT_UNBUFFERED)
@@ -1162,10 +1217,11 @@ namespace lzham
       else
       {
          uint32 decomp_buf_size = 1U << pState->m_params.m_dict_size_log2;
-         pState->m_pRaw_decomp_buf = static_cast<uint8*>(lzham_malloc(decomp_buf_size + 15));
+         pState->m_pRaw_decomp_buf = static_cast<uint8*>(lzham_malloc(malloc_context, decomp_buf_size + 15));
          if (!pState->m_pRaw_decomp_buf)
          {
-            lzham_delete(pState);
+            lzham_delete(malloc_context, pState);
+            lzham_destroy_malloc_context(malloc_context);
             return NULL;
          }
          pState->m_raw_decomp_buf_size = decomp_buf_size;
@@ -1189,7 +1245,7 @@ namespace lzham
       
       if (pState->m_params.m_decompress_flags & LZHAM_DECOMP_FLAG_OUTPUT_UNBUFFERED)
       {
-         lzham_free(pState->m_pRaw_decomp_buf);
+         lzham_free(pState->m_malloc_context, pState->m_pRaw_decomp_buf);
          pState->m_pRaw_decomp_buf = NULL;
          pState->m_raw_decomp_buf_size = 0;
          pState->m_pDecomp_buf = NULL;
@@ -1199,7 +1255,7 @@ namespace lzham
          uint32 new_dict_size = 1U << pState->m_params.m_dict_size_log2;
          if ((!pState->m_pRaw_decomp_buf) || (pState->m_raw_decomp_buf_size < new_dict_size))
          {
-            uint8 *pNew_dict = static_cast<uint8*>(lzham_realloc(pState->m_pRaw_decomp_buf, new_dict_size + 15));
+            uint8 *pNew_dict = static_cast<uint8*>(lzham_realloc(pState->m_malloc_context, pState->m_pRaw_decomp_buf, new_dict_size + 15));
             if (!pNew_dict)
                return NULL;
             pState->m_pRaw_decomp_buf = pNew_dict;
@@ -1224,8 +1280,11 @@ namespace lzham
 
       uint32 adler32 = pState->m_decomp_adler32;
 
-      lzham_free(pState->m_pRaw_decomp_buf);
-      lzham_delete(pState);
+      lzham_malloc_context malloc_context = pState->m_malloc_context;
+
+      lzham_free(malloc_context, pState->m_pRaw_decomp_buf);
+      lzham_delete(malloc_context, pState);
+      lzham_destroy_malloc_context(malloc_context);
 
       return adler32;
    }

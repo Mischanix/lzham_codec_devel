@@ -5,6 +5,29 @@
 
 namespace lzham
 {
+   void code_size_histogram::init(uint num_syms, const uint8* pCodesizes)
+   {
+      const uint8 *p = pCodesizes;
+
+      for (uint i = num_syms >> 2; i; --i)
+      {
+         uint a = p[0]; 
+         uint b = p[1];
+         uint c = p[2];
+         uint d = p[3];
+         m_num_codes[a]++;
+         m_num_codes[b]++;
+         m_num_codes[c]++;
+         m_num_codes[d]++;
+         p += 4;
+      }
+
+      for (uint i = num_syms & 3; i; --i)
+         m_num_codes[*p++]++;
+
+      LZHAM_ASSERT(static_cast<uint>(p - pCodesizes) == num_syms);
+   }
+
    struct sym_freq
    {
       uint m_freq;
@@ -200,7 +223,7 @@ namespace lzham
 		}
    }
 
-   bool generate_huffman_codes(void* pContext, uint num_syms, const uint16* pFreq, uint8* pCodesizes, uint& max_code_size, uint& total_freq_ret)
+   bool generate_huffman_codes(void* pContext, uint num_syms, const uint16* pFreq, uint8* pCodesizes, uint& max_code_size, uint& total_freq_ret, code_size_histogram &code_size_hist)
    {
       if ((!num_syms) || (num_syms > cHuffmanMaxSupportedSyms))
          return false;
@@ -224,7 +247,7 @@ namespace lzham
             
             sym_freq& sf = state.syms0[num_used_syms];
             sf.m_left = (uint16)i;
-            sf.m_right = UINT16_MAX;
+            sf.m_right = cUINT16_MAX;
             sf.m_freq = freq;
             num_used_syms++;
          }            
@@ -251,6 +274,7 @@ namespace lzham
       {
          uint len = x[i];
          max_len = math::maximum(len, max_len);
+         code_size_hist.m_num_codes[LZHAM_MIN(len, (uint)code_size_histogram::cMaxUnlimitedHuffCodeSize)]++;
          pCodesizes[syms[i].m_left] = static_cast<uint8>(len);
       }
       max_code_size = max_len;

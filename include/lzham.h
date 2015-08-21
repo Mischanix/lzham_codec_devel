@@ -26,7 +26,7 @@
 
 // Upper byte = major version
 // Lower byte = minor version
-#define LZHAM_DLL_VERSION 0x1010
+#define LZHAM_DLL_VERSION 0x1011
 
 #if defined(_WIN64) || defined(__MINGW64__) || defined(_LP64) || defined(__LP64__)
 	#define LZHAM_64BIT 1
@@ -130,6 +130,11 @@ extern "C" {
       LZHAM_COMP_FLAG_TRADEOFF_DECOMPRESSION_RATE_FOR_COMP_RATIO = 16,
       
       LZHAM_COMP_FLAG_WRITE_ZLIB_STREAM = 32,
+      
+      LZHAM_COMP_FLAG_FORCE_SINGLE_THREADED_PARSING = 64,
+
+      LZHAM_COMP_FLAG_USE_LOW_MEMORY_MATCH_FINDER = 128,
+
    } lzham_compress_flags;
 		
 	typedef enum 
@@ -139,6 +144,14 @@ extern "C" {
 		LZHAM_DEFAULT_TABLE_UPDATE_RATE = 8,
 		LZHAM_FASTEST_TABLE_UPDATE_RATE = 20
 	} lzham_table_update_rate;
+
+   #define LZHAM_EXTREME_PARSING_MAX_BEST_ARRIVALS_MIN (2)
+   
+   // LZHAM_EXTREME_PARSING_MAX_BEST_ARRIVALS_MAX can be increased by the user (if you recompile lzham), I've tried up to 64.
+   #define LZHAM_EXTREME_PARSING_MAX_BEST_ARRIVALS_MAX (8)
+
+   #define LZHAM_MIN_FAST_BYTES (8)
+   #define LZHAM_MAX_FAST_BYTES (258)
 
 	// Compression parameters struct.
 	// IMPORTANT: The values of m_dict_size_log2, m_table_update_rate, m_table_max_update_interval, and m_table_update_interval_slow_rate MUST
@@ -164,6 +177,15 @@ extern "C" {
 		lzham_uint32 m_table_max_update_interval;
 		// def=0, 32 or higher (LZHAM_DEFAULT_TABLE_UPDATE_RATE=64), scaled by 32, controls the slowing of the update update freq, higher=more rapid slowing (faster decode/lower ratio). Was 40 in prev. releases.
 		lzham_uint32 m_table_update_interval_slow_rate;
+
+      // If non-zero, must range between LZHAM_EXTREME_PARSING_MAX_BEST_ARRIVALS_MIN and LZHAM_EXTREME_PARSING_MAX_BEST_ARRIVALS_MAX.
+      // Field added in version 0x1011
+      lzham_uint32 m_extreme_parsing_max_best_arrivals;
+
+      // If non-zero, must range between LZHAM_MIN_FAST_BYTES-LZHAM_MAX_FAST_BYTES.
+      // If this is 0, the compressor will either use a fast_bytes setting controlled by m_level, or a for extreme parsing a fixed setting of LZHAM_EXTREME_PARSING_FAST_BYTES (96).
+      // Field added in version 0x1011
+      lzham_uint32 m_fast_bytes;
 
    } lzham_compress_params;
    

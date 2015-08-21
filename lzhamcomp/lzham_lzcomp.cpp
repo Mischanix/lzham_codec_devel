@@ -11,8 +11,18 @@ namespace lzham
 {
    struct lzham_compress_state
    {
+      lzham_compress_state(lzham_malloc_context malloc_context) : 
+         m_tp(malloc_context),
+         m_malloc_context(malloc_context),
+         m_compressor(malloc_context)
+      {
+      }
+
       // task_pool requires 8 or 16 alignment
       task_pool m_tp;
+      
+      lzham_malloc_context m_malloc_context;
+
       lzcompressor m_compressor;
 
       uint m_dict_size_log2;
@@ -30,14 +40,31 @@ namespace lzham
 
       lzham_compress_status_t m_status;
    };
-
+   
    static lzham_compress_status_t create_internal_init_params(lzcompressor::init_params &internal_params, const lzham_compress_params *pParams)
    {
       if ((pParams->m_dict_size_log2 < CLZBase::cMinDictSizeLog2) || (pParams->m_dict_size_log2 > CLZBase::cMaxDictSizeLog2))
+      {
+         LZHAM_LOG_ERROR(6000);
          return LZHAM_COMP_STATUS_INVALID_PARAMETER;
-			     
-      internal_params.m_dict_size_log2 = pParams->m_dict_size_log2;
+      }
+      
+      if (pParams->m_extreme_parsing_max_best_arrivals > cMaxParseNodeStates)
+      {
+         LZHAM_LOG_ERROR(6001);
+         return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+      }
+      
+      if (pParams->m_extreme_parsing_max_best_arrivals <= 1)
+         internal_params.m_extreme_parsing_max_best_arrivals = cDefaultMaxParseNodeStates;
+      else
+         internal_params.m_extreme_parsing_max_best_arrivals = pParams->m_extreme_parsing_max_best_arrivals;			     
 
+      if (pParams->m_fast_bytes > 0)
+         internal_params.m_fast_bytes_override = math::clamp<uint>(pParams->m_fast_bytes, LZHAM_MIN_FAST_BYTES, LZHAM_MAX_FAST_BYTES);
+
+      internal_params.m_dict_size_log2 = pParams->m_dict_size_log2;
+      
       if (pParams->m_max_helper_threads < 0)
          internal_params.m_max_helper_threads = lzham_get_max_helper_threads();
       else
@@ -49,7 +76,10 @@ namespace lzham
       if (pParams->m_num_seed_bytes)
       {
          if ((!pParams->m_pSeed_bytes) || (pParams->m_num_seed_bytes > (1U << pParams->m_dict_size_log2)))
+         {
+            LZHAM_LOG_ERROR(6002);
             return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+         }
 
          internal_params.m_num_seed_bytes = pParams->m_num_seed_bytes;
          internal_params.m_pSeed_bytes = pParams->m_pSeed_bytes;
@@ -63,6 +93,7 @@ namespace lzham
          case LZHAM_COMP_LEVEL_BETTER:    internal_params.m_compression_level = cCompressionLevelBetter; break;
          case LZHAM_COMP_LEVEL_UBER:      internal_params.m_compression_level = cCompressionLevelUber; break;
          default:
+            LZHAM_LOG_ERROR(6003);
             return LZHAM_COMP_STATUS_INVALID_PARAMETER;
       };
 
@@ -87,19 +118,34 @@ namespace lzham
    lzham_compress_state_ptr LZHAM_CDECL lzham_lib_compress_init(const lzham_compress_params *pParams)
    {
       if ((!pParams) || (pParams->m_struct_size != sizeof(lzham_compress_params)))
+      {
+         LZHAM_LOG_ERROR(6004);
          return NULL;
+      }
 
       if ((pParams->m_dict_size_log2 < CLZBase::cMinDictSizeLog2) || (pParams->m_dict_size_log2 > CLZBase::cMaxDictSizeLog2))
+      {
+         LZHAM_LOG_ERROR(6005);
          return NULL;
+      }
 
       lzcompressor::init_params internal_params;
       lzham_compress_status_t status = create_internal_init_params(internal_params, pParams);
       if (status != LZHAM_COMP_STATUS_SUCCESS)
+      {
+         LZHAM_LOG_ERROR(6006);
          return NULL;
+      }
 
-      lzham_compress_state *pState = lzham_new<lzham_compress_state>();
+      lzham_malloc_context malloc_context = lzham_create_malloc_context(0);
+
+      lzham_compress_state *pState = lzham_new<lzham_compress_state>(malloc_context, malloc_context);
       if (!pState)
+      {
+         lzham_destroy_malloc_context(malloc_context);
+         LZHAM_LOG_ERROR(6007);
          return NULL;
+      }
 
       pState->m_params = *pParams;
 
@@ -115,7 +161,9 @@ namespace lzham
       {
          if (!pState->m_tp.init(internal_params.m_max_helper_threads))
          {
-            lzham_delete(pState);
+            lzham_delete(malloc_context, pState);
+            lzham_destroy_malloc_context(malloc_context);
+            LZHAM_LOG_ERROR(6008);
             return NULL;
          }
          if (pState->m_tp.get_num_threads() >= internal_params.m_max_helper_threads)
@@ -130,7 +178,9 @@ namespace lzham
 
       if (!pState->m_compressor.init(internal_params))
       {
-         lzham_delete(pState);
+         lzham_delete(malloc_context, pState);
+         lzham_destroy_malloc_context(malloc_context);
+         LZHAM_LOG_ERROR(6009);
          return NULL;
       }
 
@@ -143,7 +193,10 @@ namespace lzham
       if (pState)
       {
          if (!pState->m_compressor.reset())
+         {
+            LZHAM_LOG_ERROR(6010);
             return NULL;
+         }
 
          pState->m_pIn_buf = NULL;
          pState->m_pIn_buf_size = NULL;
@@ -161,12 +214,18 @@ namespace lzham
    {
       lzham_compress_state *pState = static_cast<lzham_compress_state *>(p);
       if (!pState)
+      {
+         LZHAM_LOG_ERROR(6011);
          return 0;
+      }
 
       uint32 adler32 = pState->m_compressor.get_src_adler32();
 
-      lzham_delete(pState);
+      lzham_malloc_context malloc_context = pState->m_malloc_context;
 
+      lzham_delete(malloc_context, pState);
+      lzham_destroy_malloc_context(malloc_context);
+      
       return adler32;
    }
 
@@ -188,13 +247,22 @@ namespace lzham
       lzham_compress_state *pState = static_cast<lzham_compress_state*>(p);
 
       if ((!pState) || (!pState->m_params.m_dict_size_log2) || (pState->m_status >= LZHAM_COMP_STATUS_FIRST_SUCCESS_OR_FAILURE_CODE) || (!pIn_buf_size) || (!pOut_buf_size))
+      {
+         LZHAM_LOG_ERROR(6012);
          return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+      }
 
       if ((*pIn_buf_size) && (!pIn_buf))
+      {
+         LZHAM_LOG_ERROR(6013);
          return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+      }
 
       if ((!*pOut_buf_size) || (!pOut_buf))
+      {
+         LZHAM_LOG_ERROR(6014);
          return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+      }
 
       byte_vec &comp_data = pState->m_compressor.get_compressed_data();
       size_t num_bytes_written_to_out_buf = 0;
@@ -230,6 +298,7 @@ namespace lzham
          if ((*pIn_buf_size) || (flush_type != LZHAM_FINISH))
          {
             pState->m_status = LZHAM_COMP_STATUS_INVALID_PARAMETER;
+            LZHAM_LOG_ERROR(6015);
             return pState->m_status;
          }
 
@@ -251,6 +320,7 @@ namespace lzham
             *pIn_buf_size = 0;
             *pOut_buf_size = num_bytes_written_to_out_buf;
             pState->m_status = LZHAM_COMP_STATUS_FAILED;
+            LZHAM_LOG_ERROR(6016);
             return pState->m_status;
          }
       }
@@ -264,6 +334,7 @@ namespace lzham
                *pIn_buf_size = 0;
                *pOut_buf_size = num_bytes_written_to_out_buf;
                pState->m_status = LZHAM_COMP_STATUS_FAILED;
+               LZHAM_LOG_ERROR(6017);
                return pState->m_status;
             }
          }
@@ -274,6 +345,7 @@ namespace lzham
                *pIn_buf_size = 0;
                *pOut_buf_size = num_bytes_written_to_out_buf;
                pState->m_status = LZHAM_COMP_STATUS_FAILED;
+               LZHAM_LOG_ERROR(6018);
                return pState->m_status;
             }
             pState->m_finished_compression = true;
@@ -305,46 +377,68 @@ namespace lzham
    lzham_compress_status_t LZHAM_CDECL lzham_lib_compress_memory(const lzham_compress_params *pParams, lzham_uint8* pDst_buf, size_t *pDst_len, const lzham_uint8* pSrc_buf, size_t src_len, lzham_uint32 *pAdler32)
    {
       if ((!pParams) || (!pDst_len))
+      {
+         LZHAM_LOG_ERROR(6019);
          return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+      }
 
       if (src_len)
       {
          if (!pSrc_buf)
+         {
+            LZHAM_LOG_ERROR(6020);
             return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+         }
       }
 
       if (sizeof(size_t) > sizeof(uint32))
       {
-         if (src_len > UINT32_MAX)
+         if (src_len > cUINT32_MAX)
+         {
+            LZHAM_LOG_ERROR(6021);
             return LZHAM_COMP_STATUS_INVALID_PARAMETER;
+         }
       }
 
       lzcompressor::init_params internal_params;
       lzham_compress_status_t status = create_internal_init_params(internal_params, pParams);
       if (status != LZHAM_COMP_STATUS_SUCCESS)
+      {
+         LZHAM_LOG_ERROR(6022);
          return status;
+      }
+
+      lzham_malloc_context malloc_context = lzham_create_malloc_context(0);
 
       task_pool *pTP = NULL;
       if (internal_params.m_max_helper_threads)
       {
-         pTP = lzham_new<task_pool>();
+         pTP = lzham_new<task_pool>(malloc_context, malloc_context);
          if (!pTP->init(internal_params.m_max_helper_threads))
-            return LZHAM_COMP_STATUS_FAILED;
+         {
+            lzham_destroy_malloc_context(malloc_context);
+            LZHAM_LOG_ERROR(6023);
+            return LZHAM_COMP_STATUS_FAILED_INITIALIZING;
+         }
 
          internal_params.m_pTask_pool = pTP;
       }
 
-      lzcompressor *pCompressor = lzham_new<lzcompressor>();
+      lzcompressor *pCompressor = lzham_new<lzcompressor>(malloc_context, malloc_context);
       if (!pCompressor)
       {
-         lzham_delete(pTP);
-         return LZHAM_COMP_STATUS_FAILED;
+         lzham_delete(malloc_context, pTP);
+         lzham_destroy_malloc_context(malloc_context);
+         LZHAM_LOG_ERROR(6024);
+         return LZHAM_COMP_STATUS_FAILED_INITIALIZING;
       }
 
       if (!pCompressor->init(internal_params))
       {
-         lzham_delete(pTP);
-         lzham_delete(pCompressor);
+         lzham_delete(malloc_context, pTP);
+         lzham_delete(malloc_context, pCompressor);
+         lzham_destroy_malloc_context(malloc_context);
+         LZHAM_LOG_ERROR(6025);
          return LZHAM_COMP_STATUS_INVALID_PARAMETER;
       }
 
@@ -353,8 +447,10 @@ namespace lzham
          if (!pCompressor->put_bytes(pSrc_buf, static_cast<uint32>(src_len)))
          {
             *pDst_len = 0;
-            lzham_delete(pTP);
-            lzham_delete(pCompressor);
+            lzham_delete(malloc_context, pTP);
+            lzham_delete(malloc_context, pCompressor);
+            lzham_destroy_malloc_context(malloc_context);
+            LZHAM_LOG_ERROR(6026);
             return LZHAM_COMP_STATUS_FAILED;
          }
       }
@@ -362,8 +458,10 @@ namespace lzham
       if (!pCompressor->put_bytes(NULL, 0))
       {
          *pDst_len = 0;
-         lzham_delete(pTP);
-         lzham_delete(pCompressor);
+         lzham_delete(malloc_context, pTP);
+         lzham_delete(malloc_context, pCompressor);
+         lzham_destroy_malloc_context(malloc_context);
+         LZHAM_LOG_ERROR(6027);
          return LZHAM_COMP_STATUS_FAILED;
       }
 
@@ -377,15 +475,18 @@ namespace lzham
 
       if (comp_data.size() > dst_buf_size)
       {
-         lzham_delete(pTP);
-         lzham_delete(pCompressor);
+         lzham_delete(malloc_context, pTP);
+         lzham_delete(malloc_context, pCompressor);
+         lzham_destroy_malloc_context(malloc_context);
+         LZHAM_LOG_ERROR(6028);
          return LZHAM_COMP_STATUS_OUTPUT_BUF_TOO_SMALL;
       }
 
       memcpy(pDst_buf, comp_data.get_ptr(), comp_data.size());
 
-      lzham_delete(pTP);
-      lzham_delete(pCompressor);
+      lzham_delete(malloc_context, pTP);
+      lzham_delete(malloc_context, pCompressor);
+      lzham_destroy_malloc_context(malloc_context);
       return LZHAM_COMP_STATUS_SUCCESS;
    }
 
@@ -401,11 +502,20 @@ namespace lzham
       LZHAM_NOTE_UNUSED(strategy);
 
       if (!pStream)
+      {
+         LZHAM_LOG_ERROR(6029);
          return LZHAM_Z_STREAM_ERROR;
+      }
       if ((mem_level < 1) || (mem_level > 9))
+      {
+         LZHAM_LOG_ERROR(6030);
          return LZHAM_Z_PARAM_ERROR;
+      }
       if ((method != LZHAM_Z_DEFLATED) && (method != LZHAM_Z_LZHAM))
+      {
+         LZHAM_LOG_ERROR(6031);
          return LZHAM_Z_PARAM_ERROR;
+      }
 
       if (level == LZHAM_Z_DEFAULT_COMPRESSION)
          level = 9;
@@ -423,7 +533,10 @@ namespace lzham
 
       int max_window_bits = LZHAM_64BIT_POINTERS ? LZHAM_MAX_DICT_SIZE_LOG2_X64 : LZHAM_MAX_DICT_SIZE_LOG2_X86;
       if ((labs(window_bits) < LZHAM_MIN_DICT_SIZE_LOG2) || (labs(window_bits) > max_window_bits))
+      {
+         LZHAM_LOG_ERROR(6032);
          return LZHAM_Z_PARAM_ERROR;
+      }
 
       lzham_compress_params comp_params;
 
@@ -460,7 +573,10 @@ namespace lzham
 
       lzham_compress_state_ptr pComp = lzham_lib_compress_init(&comp_params);
       if (!pComp)
+      {
+         LZHAM_LOG_ERROR(6033);
          return LZHAM_Z_PARAM_ERROR;
+      }
 
       pStream->state = (struct lzham_z_internal_state *)pComp;
 
@@ -470,15 +586,24 @@ namespace lzham
    int lzham_lib_z_deflateReset(lzham_z_streamp pStream)
    {
       if (!pStream)
+      {
+         LZHAM_LOG_ERROR(6034);
          return LZHAM_Z_STREAM_ERROR;
+      }
 
       lzham_compress_state_ptr pComp = (lzham_compress_state_ptr)pStream->state;
       if (!pComp)
+      {
+         LZHAM_LOG_ERROR(6035);
          return LZHAM_Z_STREAM_ERROR;
+      }
 
       pComp = lzham_lib_compress_reinit(pComp);
       if (!pComp)
+      {
+         LZHAM_LOG_ERROR(6036);
          return LZHAM_Z_STREAM_ERROR;
+      }
 
       pStream->state = (struct lzham_z_internal_state *)pComp;
 
@@ -488,10 +613,16 @@ namespace lzham
    int lzham_lib_z_deflate(lzham_z_streamp pStream, int flush)
    {
       if ((!pStream) || (!pStream->state) || (flush < 0) || (flush > LZHAM_Z_FINISH) || (!pStream->next_out))
+      {
+         LZHAM_LOG_ERROR(6037);
          return LZHAM_Z_STREAM_ERROR;
+      }
 
       if (!pStream->avail_out)
+      {
+         LZHAM_LOG_ERROR(6038);
          return LZHAM_Z_BUF_ERROR;
+      }
 
       if (flush == LZHAM_Z_PARTIAL_FLUSH)
          flush = LZHAM_Z_SYNC_FLUSH;
@@ -524,6 +655,7 @@ namespace lzham
          if (status >= LZHAM_COMP_STATUS_FIRST_FAILURE_CODE)
          {
             lzham_status = LZHAM_Z_STREAM_ERROR;
+            LZHAM_LOG_ERROR(6039);
             break;
          }
          else if (status == LZHAM_COMP_STATUS_SUCCESS)
@@ -537,6 +669,7 @@ namespace lzham
          {
             if ((flush) || (pStream->total_in != orig_total_in) || (pStream->total_out != orig_total_out))
                break;
+            LZHAM_LOG_ERROR(6040);
             return LZHAM_Z_BUF_ERROR; // Can't make forward progress without some input.
          }
       }
@@ -546,7 +679,10 @@ namespace lzham
    int lzham_lib_z_deflateEnd(lzham_z_streamp pStream)
    {
       if (!pStream)
+      {
+         LZHAM_LOG_ERROR(6041);
          return LZHAM_Z_STREAM_ERROR;
+      }
 
       lzham_compress_state_ptr pComp = (lzham_compress_state_ptr)pStream->state;
       if (pComp)
@@ -573,7 +709,10 @@ namespace lzham
 
       // In case lzham_z_ulong is 64-bits (argh I hate longs).
       if ((source_len | *pDest_len) > 0xFFFFFFFFU)
+      {
+         LZHAM_LOG_ERROR(6042);
          return LZHAM_Z_PARAM_ERROR;
+      }
 
       stream.next_in = pSource;
       stream.avail_in = (uint)source_len;
@@ -582,7 +721,10 @@ namespace lzham
 
       status = lzham_lib_z_deflateInit(&stream, level);
       if (status != LZHAM_Z_OK)
+      {
+         LZHAM_LOG_ERROR(6043);
          return status;
+      }
 
       status = lzham_lib_z_deflate(&stream, LZHAM_Z_FINISH);
       if (status != LZHAM_Z_STREAM_END)
